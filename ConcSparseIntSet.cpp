@@ -44,12 +44,19 @@ class ConcSkipList {
 	bool fullyLinked;
 	Lock lock;
 
-	Node(signed long key, int topLayer) 
+	Node(signed long key, int topLayer, unsigned long value) 
 	{
 	    this->key = key;
 	    this->topLayer = topLayer;
+	    this->value = value;
 	}
     } lSentinal, rSentinal;
+
+    void init(void) {
+	int layer;
+	for (layer = 0; layer < MAX_HEIGHT; layer++)
+	    lSentinal.nexts[layer] = &rSentinal;
+    }
 
     int findNode(signed long key, Node *preds[], Node *succs[])
     {
@@ -73,6 +80,7 @@ class ConcSkipList {
 	    // the node that succeeds preds[layer] (at "layer")
 	    succs[layer] = cur;
 	}
+	return lFound;
     }
 
     // returns a random number in the range 0 to MAX_HEIGHT-1.
@@ -119,19 +127,197 @@ class ConcSkipList {
     }
 
 public:
-    ConcSkipList() : lSentinal(MinInt, MAX_HEIGHT-1) , rSentinal(MaxInt, MAX_HEIGHT-1) { }
+    ConcSkipList() : lSentinal(MinInt, MAX_HEIGHT-1, 0) , rSentinal(MaxInt, MAX_HEIGHT-1, 0) 
+    { 
+	init();
+    }
 
-    // the interface will have "key<int> and value<ulong>" so as to make it
+    // the interface will have "key<uint> and value<ulong>" so as to make it
     // fit for using as sparse bit vector. internally uses a long key.
-    bool insert(int pKey, unsigned long value)
+    bool insert(unsigned pKey, unsigned long value)
     {
 	signed long key = (signed long) pKey;
-	///////////////////// TODO //////////
+	int topLayer = getRandomHeight();
+	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT], *nodeFound;
+	Node *pred, *succ, *prevPred, *newNode;
+	int lFound, highestLocked, layer;
+	bool valid;
+
+	while (true) {
+	    lFound = findNode(key, preds, succs);
+	    if (lFound != -1) {
+		nodeFound = succs[lFound];
+		if (!nodeFound->marked) {
+		    while (!nodeFound->fullyLinked) {
+			// this looks very bad, maybe
+			// add some delay? how much? how?
+			;
+		    }
+		    return false;
+		}
+		// is a wait needed here?
+		continue;
+	    }
+	    highestLocked = -1;
+	    prevPred = NULL;
+	    valid = true;
+	    for (layer = 0; layer <= topLayer && valid; layer++) {
+		pred = preds[layer];
+		succ = succs[layer];
+		// don't want to lock the same node multiple times ...
+		if (pred != prevPred) {
+		    pred->lock.lock();
+		    highestLocked = layer;
+		    prevPred = pred;
+		}
+		valid = !pred->marked && !succ->marked && 
+		    pred->nexts[layer] == succ;
+	    }
+	    if (!valid) {
+		prevPred = NULL;
+		// release locks and continue
+		for (layer = 0; layer <= highestLocked; layer++) {
+		    pred = preds[layer];
+		    // don't want to unlock the same node multiple times ...
+		    if (pred != prevPred) {
+			pred->lock.unlock();
+			prevPred = pred;
+		    }
+		}
+		continue;
+	    }
+	    
+	    // if we're here, it means we've got all the necessary locks. its now
+	    // safe to do the linked list operations for lists at all levels.
+	    newNode = new Node(key, topLayer, value);
+	    for (layer = 0; layer <= topLayer; layer++)  {
+		newNode->nexts[layer] = succs[layer];
+		preds[layer]->nexts[layer] = newNode;
+	    }
+	    newNode->fullyLinked = true;
+	    prevPred = NULL;
+	    // release locks and return
+	    for (layer = 0; layer <= highestLocked && valid; layer++) {
+		pred = preds[layer];
+		// don't want to unlock the same node multiple times ...
+		if (pred != prevPred) {
+		    pred->lock.unlock();
+		    prevPred = pred;
+		}
+	    }
+	    return true;
+	}
+    }
+
+    bool contains(int key) {
+	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
+	int lFound = findNode (key, preds, succs);
+	return (lFound != -1 &&
+		succs[lFound]->fullyLinked &&
+		!succs[lFound]->marked);
+
+    }
+
+    // not thread safe
+    void clear_unsafe(void) {
+	Node *ptr1, *ptr2;
+	for (ptr1 = &lSentinal; ptr1 != &rSentinal; ptr1 = ptr2) {
+	    ptr2 = ptr1->nexts[0];
+	    free(ptr1);
+	}
+	init();
     }
 };
 
+// Now start on the sparse bit vector using the concurrent skip list above.
+
+static inline void get_base_off(unsigned bit, unsigned *base, unsigned *off) {
+    static const int wordSize = sizeof(unsigned long) * 8;
+
+    *base = bit / wordSize;
+    *off = bit % wordSize;
+}
+
+#define TEST_CONC_SPARSE_INT_SET
+
+#ifdef TEST_CONC_SPARSE_INT_SET
+
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_scheduler_init.h>
+#include <tbb/concurrent_unordered_set.h>
+typedef tbb::concurrent_unordered_set<int> RefSetType;
+
+static const unsigned size = 200000;
+unsigned input[size];
+RefSetType ref;
+ConcSkipList t1;
+
+// for tbb's parallel_for
+struct TestFunc {
+    void operator() (const tbb::blocked_range<unsigned> &range) const
+    {
+	unsigned ii, val;
+	bool retVal;
+
+	for (ii = range.begin(); ii < range.end(); ii++) {
+	    val = input[ii];
+	    if (ref.find(val) != ref.end()) {
+		// value already present
+		retVal = t1.insert(val, 0);
+		assert(retVal == false);
+	    } else {
+		// value not present
+		ref.insert(val);
+		retVal = t1.insert(val, 0);
+		assert(retVal == true);
+	    }
+	}
+    }
+} testFunc;
 
 int main(void)
 {
+    unsigned ii, val, retVal;
 
+    srandom(time(NULL));
+
+    // initial serial test.
+    for (ii = 0; ii < 10000; ii++) {
+	val = random() % 10000;
+	if (ref.find(val) != ref.end()) {
+	    // value already present
+	    retVal = t1.insert(val, 0);
+	    assert(retVal == false);
+	} else {
+	    // value not present
+	    ref.insert(val);
+	    retVal = t1.insert(val, 0);
+	    assert(retVal == true);
+	}
+    }
+    for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
+	retVal = t1.contains(*iter);
+	assert(retVal == true);
+    }
+
+    // now a parallel test ...
+    // fill some random input into an array (random() is not thread safe)
+    for (ii = 0; ii < size; ii++) {
+	input[ii] = random();
+    }
+
+    tbb::blocked_range<unsigned> full_range(0, size, 5);
+
+    tbb::task_scheduler_init init(2);
+    parallel_for(full_range, testFunc);
+
+    for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
+	retVal = t1.contains(*iter);
+	assert(retVal == true);
+    }
+
+    return 0;
 }
+
+#endif // TEST_CONC_SPARSE_INT_SET
