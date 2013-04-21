@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <climits>
 #include <cassert>
+#include <cstdint>
 
 #include <tbb/concurrent_vector.h>
 #include <tbb/combinable.h>
@@ -19,7 +20,8 @@
 typedef tbb::spin_mutex Lock;
 
 #define MAX_HEIGHT 4
-static const unsigned wordSize = sizeof(unsigned long) * 8;
+// below is the wordSize for the value stored in each Node.
+static const uint32_t wordSize = sizeof(uint64_t) * 8;
 
 // This class is just to ensure initialization of an int to 0.
 class Int {
@@ -33,11 +35,11 @@ typedef tbb::combinable<Int> threadLocalInt;
 
 class ConcSkipList {
 
-    static const signed long MinInt = -1, MaxInt = LONG_MAX;
+    static const int64_t MinInt = -1, MaxInt = INT64_MAX;
     class Node {
     public:
-	signed long key;
-	unsigned long value;
+	int64_t key;
+	uint64_t value;
 	
 	int topLayer;
 	
@@ -46,7 +48,7 @@ class ConcSkipList {
 	bool fullyLinked;
 	Lock lock;
 
-	Node(signed long key, int topLayer, unsigned long value) 
+	Node(int64_t key, int topLayer, uint64_t value) 
 	{
 	    this->key = key;
 	    this->topLayer = topLayer;
@@ -66,7 +68,7 @@ class ConcSkipList {
 	deletedNodes.clear();
     }
 
-    int findNode(signed long key, Node *preds[], Node *succs[])
+    int findNode(int64_t key, Node *preds[], Node *succs[])
     {
 	int lFound = -1, layer;
 	Node *pred = &lSentinal, *cur;
@@ -145,9 +147,11 @@ public:
     //   return pointer to newly inserted Node.
     // else
     //   return pointer to existing Node with key pKey.
-    Node *insert_default(unsigned pKey)
+    Node *insert_default(uint32_t pKey)
     {
-	signed long key = (signed long) pKey;
+	// the internal container for key is bigger than what
+	// is supported from outside. This is to accomodate MaxInt and MinInt
+	int64_t key = (int64_t) pKey;
 	int topLayer = getRandomHeight();
 	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT], *nodeFound;
 	Node *pred, *succ, *prevPred, *newNode;
@@ -228,8 +232,10 @@ public:
 	}
     }
 
-    bool contains(unsigned pKey) {
-	signed long key = (signed long) pKey;
+    bool contains(uint32_t pKey) {
+	// the internal container for key is bigger than what
+	// is supported from outside. This is to accomodate MaxInt and MinInt
+	int64_t key = (int64_t) pKey;
 	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
 	int lFound = findNode (key, preds, succs);
 
@@ -242,9 +248,9 @@ public:
     // sparse bit vector. this will atomically add "bit" to the node
     // corresponding to pKey (with such a node being added newly if necessary).
     // returns true if bit was newly set.
-    bool add_key_bit(unsigned pKey, unsigned bit) {
+    bool add_key_bit(uint32_t pKey, uint32_t bit) {
 	Node *node;
-	unsigned long value1, value2;
+	uint64_t value1, value2;
 
 	assert(bit < wordSize);
 
@@ -253,15 +259,15 @@ public:
 
 	node->lock.lock();
 	value1 = node->value;
-	value2 = value1 | (1 << bit);
+	value2 = value1 | ((uint64_t)1 << bit);
 	node->value = value2;
 	node->lock.unlock();
 
 	return (value1 != value2);
     }
 
-    bool test_key_bit(unsigned pKey, unsigned bit) {
-	signed long key = (signed long) pKey;
+    bool test_key_bit(uint32_t pKey, uint32_t bit) {
+	int64_t key = (int64_t) pKey;
 	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
 	int lFound = findNode (key, preds, succs);
 
@@ -270,7 +276,7 @@ public:
 	return (lFound != -1 &&
 		succs[lFound]->fullyLinked &&
 		!succs[lFound]->marked &&
-		(succs[lFound]->value | (1 << bit)));
+		(succs[lFound]->value & ((uint64_t)1 << bit)));
 
     }
 
@@ -295,11 +301,38 @@ public:
     ~ConcSkipList() {
 	clear_unsafe();
     }
+
+    class ConcSkipListIterator {
+	ConcSkipList *sl;
+	Node *curNode;
+
+    public:
+	uint32_t key;
+	uint64_t value;
+
+	ConcSkipListIterator(ConcSkipList &sl, Node *startFrom = NULL) {
+	    this->sl = &sl;
+	    if (startFrom == NULL) {
+		this->curNode = sl.lSentinal.nexts[0];
+	    } else {
+		assert(startFrom != &(sl.lSentinal));
+		this->curNode = startFrom;
+	    }
+	    if (curNode != &(sl.rSentinal)) {
+		// curNode->key must hav a valid value.
+		assert(curNode->key > MinInt && curNode->key < MaxInt);
+		key = (uint32_t) curNode->key;
+		value = (uint64_t) curNode->value;
+	    }
+	}
+	
+    };
+    typedef ConcSkipListIterator iterator;
 };
 
 // Now start on the sparse bit vector using the concurrent skip list above.
 
-static inline void get_base_off(unsigned bit, unsigned *base, unsigned *off) {
+static inline void get_base_off(uint32_t bit, uint32_t *base, uint32_t *off) {
     *base = bit / wordSize;
     *off = bit % wordSize;
 }
@@ -314,17 +347,17 @@ ConcSparseIntSet::~ConcSparseIntSet()
     delete sl;
 }
 
-bool ConcSparseIntSet::set(unsigned bit)
+bool ConcSparseIntSet::set(uint32_t bit)
 {
-    unsigned base, offset;
+    uint32_t base, offset;
     
     get_base_off(bit, &base, &offset);
     return (this->sl->add_key_bit(base, offset));
 }
 
-bool ConcSparseIntSet::test(unsigned bit)
+bool ConcSparseIntSet::test(uint32_t bit)
 {
-    unsigned base, offset;
+    uint32_t base, offset;
 
     get_base_off(bit, &base, &offset);
     return (this->sl->test_key_bit(base, offset));
@@ -336,23 +369,24 @@ bool ConcSparseIntSet::test(unsigned bit)
 // Everything below is just testing code
 #ifdef TEST_CONC_SPARSE_INT_SET
 
+#include <ctime>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <tbb/task_scheduler_init.h>
 #include <tbb/concurrent_unordered_set.h>
 typedef tbb::concurrent_unordered_set<int> RefSetType;
 
-static const unsigned size = 200000;
-unsigned input[size];
+static const uint32_t size = 200000;
+uint32_t input[size];
 RefSetType ref;
 ConcSkipList t1;
 ConcSparseIntSet t2;
 
 // for tbb's parallel_for
 struct TestFuncKey {
-    void operator() (const tbb::blocked_range<unsigned> &range) const
+    void operator() (const tbb::blocked_range<uint32_t> &range) const
     {
-	unsigned ii, val;
+	uint32_t ii, val;
 
 	for (ii = range.begin(); ii < range.end(); ii++) {
 	    val = input[ii];
@@ -369,9 +403,9 @@ struct TestFuncKey {
 } testFuncKey;
 
 struct TestFuncBit {
-    void operator() (const tbb::blocked_range<unsigned> &range) const
+    void operator() (const tbb::blocked_range<uint32_t> &range) const
     {
-	unsigned ii, val;
+	uint32_t ii, val;
 	bool retVal;
 
 	for (ii = range.begin(); ii < range.end(); ii++) {
@@ -392,9 +426,12 @@ struct TestFuncBit {
 
 int main(void)
 {
-    unsigned ii, val, retVal;
+    uint32_t ii, val, retVal;
+    time_t curTime;
 
-    srandom(time(NULL));
+    curTime = time(NULL);
+    srandom(curTime);
+    printf("seed=%lu\n", curTime);
 
     // PART1: Test only key insertion / contains. (ConcSkipList)
 
@@ -423,8 +460,8 @@ int main(void)
 	input[ii] = random();
     }
 
-    tbb::blocked_range<unsigned> full_range(0, size, 5);
-    tbb::task_scheduler_init init(2);
+    tbb::blocked_range<uint32_t> full_range(0, size, 5);
+    tbb::task_scheduler_init init(1);
 
     // insert random elements, parallelly
     parallel_for(full_range, testFuncKey);
