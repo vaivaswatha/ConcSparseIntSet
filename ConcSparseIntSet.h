@@ -1,4 +1,7 @@
-/* Vaivaswatha N: GPL v3.0.  */
+/* Vaivaswatha N: GPL v3.0.  
+ * The public members of class ConcSparseIntSet provide the
+ * interface for the concurrent sparse integer set class. 
+ */
 
 #ifndef _CONC_SPARSE_INT_SET
 #define _CONC_SPARSE_INT_SET
@@ -19,6 +22,9 @@ typedef tbb::spin_mutex Lock;
 // below is the wordSize for the value stored in each Node.
 static const uint32_t wordSize = sizeof(uint64_t) * 8;
 
+// This skip list is designed to
+// be suitable for use by a covering
+// concurrent sparse bit vector class.
 class ConcSkipList {
     // use a number just lesser/greater than the numbers
     // representable in uint32 (these are the open bounds).
@@ -62,10 +68,10 @@ class ConcSkipList {
     // sparse bit vector. this will atomically add "bit" to the node
     // corresponding to pKey (with such a node being added newly if necessary).
     // returns true if bit was newly set.
-    bool add_key_bit(uint32_t pKey, uint32_t bit);
-    bool test_key_bit(uint32_t pKey, uint32_t bit);
+    bool addKeyBit(uint32_t pKey, uint32_t bit);
+    bool testKeyBit(uint32_t pKey, uint32_t bit);
     // not thread safe
-    void clear_unsafe(void);
+    void clearUnsafe(void);
     ~ConcSkipList();
 
     typedef std::pair<uint32_t, uint64_t> KeyValPair;
@@ -88,13 +94,10 @@ class ConcSkipList {
     };
     typedef ConcSkipListIterator iterator;
     
-    iterator begin();
-    iterator end();
+    inline iterator begin();
+    inline iterator end();
 };
 
-// This skip list is designed to
-// be suitable for use by a covering
-// concurrent sparse bit vector class.
 class ConcSparseIntSet {
 
     ConcSkipList *sl;
@@ -112,8 +115,8 @@ class ConcSparseIntSet {
 	ConcSkipList::iterator sli;
     };
     typedef ConcSparseIntSetIterator iterator;
-    iterator begin();
-    iterator end();
+    inline iterator begin();
+    inline iterator end();
 };
 
 #endif // _CONC_SPARSE_INT_SET

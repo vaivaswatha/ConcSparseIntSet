@@ -208,7 +208,7 @@ bool ConcSkipList::contains(uint32_t pKey)
 // sparse bit vector. this will atomically add "bit" to the node
 // corresponding to pKey (with such a node being added newly if necessary).
 // returns true if bit was newly set.
-bool ConcSkipList::add_key_bit(uint32_t pKey, uint32_t bit) 
+bool ConcSkipList::addKeyBit(uint32_t pKey, uint32_t bit) 
 {
     Node *node;
     uint64_t value1, value2;
@@ -227,7 +227,7 @@ bool ConcSkipList::add_key_bit(uint32_t pKey, uint32_t bit)
     return (value1 != value2);
 }
 
-bool ConcSkipList::test_key_bit(uint32_t pKey, uint32_t bit) 
+bool ConcSkipList::testKeyBit(uint32_t pKey, uint32_t bit) 
 {
     int64_t key = (int64_t) pKey;
     Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
@@ -243,7 +243,7 @@ bool ConcSkipList::test_key_bit(uint32_t pKey, uint32_t bit)
 }
 
 // not thread safe
-void ConcSkipList::clear_unsafe(void) 
+void ConcSkipList::clearUnsafe(void) 
 {
     Node *ptr1, *ptr2;
     DeletedNodesList::iterator iter;
@@ -263,7 +263,7 @@ void ConcSkipList::clear_unsafe(void)
 
 ConcSkipList::~ConcSkipList() 
 {
-    clear_unsafe();
+    clearUnsafe();
 }
 
 ConcSkipList::ConcSkipListIterator::ConcSkipListIterator
@@ -367,7 +367,7 @@ bool ConcSparseIntSet::set(uint32_t bit)
     uint32_t base, offset;
     
     get_base_off(bit, &base, &offset);
-    return (this->sl->add_key_bit(base, offset));
+    return (this->sl->addKeyBit(base, offset));
 }
 
 bool ConcSparseIntSet::test(uint32_t bit)
@@ -375,7 +375,7 @@ bool ConcSparseIntSet::test(uint32_t bit)
     uint32_t base, offset;
 
     get_base_off(bit, &base, &offset);
-    return (this->sl->test_key_bit(base, offset));
+    return (this->sl->testKeyBit(base, offset));
 }
 
 // Uncomment below line to enable testing. Has a main() routine.
