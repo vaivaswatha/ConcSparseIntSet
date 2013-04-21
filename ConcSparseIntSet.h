@@ -79,7 +79,6 @@ class ConcSkipList {
     class ConcSkipListIterator {
 	ConcSkipList *sl;
 	Node *curNode;
-	ConcSkipListIterator() {};
 	
     public:
 	uint32_t key;
@@ -112,7 +111,16 @@ class ConcSparseIntSet {
     inline bool test(unsigned bit);
 
     class ConcSparseIntSetIterator {
+	ConcSkipList *sl;
 	ConcSkipList::iterator sli;
+	uint32_t currOff;
+
+    public:
+	ConcSparseIntSetIterator(ConcSkipList &sl, ConcSkipList::iterator &sli);
+	uint32_t operator* ();
+	ConcSparseIntSetIterator &operator++ ();
+	bool operator== (const ConcSparseIntSetIterator &rhs);
+	bool operator!= (const ConcSparseIntSetIterator &rhs);
     };
     typedef ConcSparseIntSetIterator iterator;
     inline iterator begin();

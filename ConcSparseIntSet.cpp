@@ -378,6 +378,32 @@ bool ConcSparseIntSet::test(uint32_t bit)
     return (this->sl->testKeyBit(base, offset));
 }
 
+ConcSparseIntSet::ConcSparseIntSetIterator::ConcSparseIntSetIterator
+(ConcSkipList &sl, ConcSkipList::ConcSkipListIterator &sli) : sl(&sl), sli(sli)
+{
+    ;
+}
+
+uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::operator* ()
+{
+    return 0;
+}
+
+ConcSparseIntSet::ConcSparseIntSetIterator &ConcSparseIntSet::ConcSparseIntSetIterator::operator++ ()
+{
+    return *this;
+}
+
+bool ConcSparseIntSet::ConcSparseIntSetIterator::operator== (const ConcSparseIntSetIterator &rhs)
+{
+    return true;
+}
+
+bool ConcSparseIntSet::ConcSparseIntSetIterator::operator!= (const ConcSparseIntSetIterator &rhs)
+{
+    return false;
+}
+
 // Uncomment below line to enable testing. Has a main() routine.
 #define TEST_CONC_SPARSE_INT_SET
 
