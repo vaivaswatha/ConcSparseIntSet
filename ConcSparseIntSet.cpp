@@ -19,6 +19,7 @@
 typedef tbb::spin_mutex Lock;
 
 #define MAX_HEIGHT 4
+static const unsigned wordSize = sizeof(unsigned long) * 8;
 
 // This class is just to ensure initialization of an int to 0.
 class Int {
@@ -139,9 +140,12 @@ public:
 	init();
     }
 
-    // the interface will have "key<uint> and value<ulong>" so as to make it
-    // fit for using as sparse bit vector. internally uses a long key.
-    bool insert(unsigned pKey, unsigned long value)
+    // if pKey not already present 
+    //   insert pKey with a default 0 value.
+    //   return pointer to newly inserted Node.
+    // else
+    //   return pointer to existing Node with key pKey.
+    Node *insert_default(unsigned pKey)
     {
 	signed long key = (signed long) pKey;
 	int topLayer = getRandomHeight();
@@ -153,16 +157,24 @@ public:
 	while (true) {
 	    lFound = findNode(key, preds, succs);
 	    if (lFound != -1) {
+		// Node found ... 
 		nodeFound = succs[lFound];
+		// but is it being deleted?
 		if (!nodeFound->marked) {
+		    // not being deleted, but is it being just inserted (linked)?
 		    while (!nodeFound->fullyLinked) {
-			// this looks very bad, maybe
+			// the node is being linked, wait for
+			// it to be fully inserted (linked).
+			// TODL: this looks very bad, maybe
 			// add some delay? how much? how?
 			;
 		    }
-		    return false;
+		    return nodeFound;
 		}
-		// is a wait needed here?
+		// The node is being deleted, try again till 
+		// it has been fully deleted. findNode() will
+		// stop returning "found" once its deleted fully.
+		// TODO: is a wait needed here too?
 		continue;
 	    }
 	    highestLocked = -1;
@@ -196,7 +208,7 @@ public:
 	    
 	    // if we're here, it means we've got all the necessary locks. its now
 	    // safe to do the linked list operations for lists at all levels.
-	    newNode = new Node(key, topLayer, value);
+	    newNode = new Node(key, topLayer, 0);
 	    for (layer = 0; layer <= topLayer; layer++)  {
 		newNode->nexts[layer] = succs[layer];
 		preds[layer]->nexts[layer] = newNode;
@@ -212,16 +224,53 @@ public:
 		    prevPred = pred;
 		}
 	    }
-	    return true;
+	    return newNode;
 	}
     }
 
-    bool contains(int key) {
+    bool contains(unsigned pKey) {
+	signed long key = (signed long) pKey;
 	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
 	int lFound = findNode (key, preds, succs);
+
 	return (lFound != -1 &&
 		succs[lFound]->fullyLinked &&
 		!succs[lFound]->marked);
+    }
+
+    // this is the interface used for adding bits, by the covering
+    // sparse bit vector. this will atomically add "bit" to the node
+    // corresponding to pKey (with such a node being added newly if necessary).
+    // returns true if bit was newly set.
+    bool add_key_bit(unsigned pKey, unsigned bit) {
+	Node *node;
+	unsigned long value1, value2;
+
+	assert(bit < wordSize);
+
+	node = insert_default(pKey);
+	assert(node != NULL);
+
+	node->lock.lock();
+	value1 = node->value;
+	value2 = value1 | (1 << bit);
+	node->value = value2;
+	node->lock.unlock();
+
+	return (value1 != value2);
+    }
+
+    bool test_key_bit(unsigned pKey, unsigned bit) {
+	signed long key = (signed long) pKey;
+	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
+	int lFound = findNode (key, preds, succs);
+
+	assert(bit < wordSize);
+
+	return (lFound != -1 &&
+		succs[lFound]->fullyLinked &&
+		!succs[lFound]->marked &&
+		(succs[lFound]->value | (1 << bit)));
 
     }
 
@@ -231,7 +280,7 @@ public:
 	DeletedNodesList::iterator iter;
 
 	// free elements on the list
-	for (ptr1 = &lSentinal; ptr1 != &rSentinal; ptr1 = ptr2) {
+	for (ptr1 = lSentinal.nexts[0]; ptr1 != &rSentinal; ptr1 = ptr2) {
 	    ptr2 = ptr1->nexts[0];
 	    free(ptr1);
 	}
@@ -251,14 +300,40 @@ public:
 // Now start on the sparse bit vector using the concurrent skip list above.
 
 static inline void get_base_off(unsigned bit, unsigned *base, unsigned *off) {
-    static const int wordSize = sizeof(unsigned long) * 8;
-
     *base = bit / wordSize;
     *off = bit % wordSize;
 }
 
+ConcSparseIntSet::ConcSparseIntSet()
+{
+    sl = new ConcSkipList;
+}
+
+ConcSparseIntSet::~ConcSparseIntSet()
+{
+    delete sl;
+}
+
+bool ConcSparseIntSet::set(unsigned bit)
+{
+    unsigned base, offset;
+    
+    get_base_off(bit, &base, &offset);
+    return (this->sl->add_key_bit(base, offset));
+}
+
+bool ConcSparseIntSet::test(unsigned bit)
+{
+    unsigned base, offset;
+
+    get_base_off(bit, &base, &offset);
+    return (this->sl->test_key_bit(base, offset));
+}
+
+// Uncomment below line to enable testing. Has a main() routine.
 #define TEST_CONC_SPARSE_INT_SET
 
+// Everything below is just testing code
 #ifdef TEST_CONC_SPARSE_INT_SET
 
 #include <tbb/blocked_range.h>
@@ -271,9 +346,29 @@ static const unsigned size = 200000;
 unsigned input[size];
 RefSetType ref;
 ConcSkipList t1;
+ConcSparseIntSet t2;
 
 // for tbb's parallel_for
-struct TestFunc {
+struct TestFuncKey {
+    void operator() (const tbb::blocked_range<unsigned> &range) const
+    {
+	unsigned ii, val;
+
+	for (ii = range.begin(); ii < range.end(); ii++) {
+	    val = input[ii];
+	    if (ref.find(val) != ref.end()) {
+		// value already present, still try to insert
+		t1.insert_default(val);
+	    } else {
+		// value not present
+		ref.insert(val);
+		t1.insert_default(val);
+	    }
+	}
+    }
+} testFuncKey;
+
+struct TestFuncBit {
     void operator() (const tbb::blocked_range<unsigned> &range) const
     {
 	unsigned ii, val;
@@ -282,18 +377,18 @@ struct TestFunc {
 	for (ii = range.begin(); ii < range.end(); ii++) {
 	    val = input[ii];
 	    if (ref.find(val) != ref.end()) {
-		// value already present
-		retVal = t1.insert(val, 0);
+		// value already present, still try to insert
+		retVal = t2.set(val);
 		assert(retVal == false);
 	    } else {
 		// value not present
 		ref.insert(val);
-		retVal = t1.insert(val, 0);
+		retVal = t2.set(val);
 		assert(retVal == true);
 	    }
 	}
     }
-} testFunc;
+} testFuncBit;
 
 int main(void)
 {
@@ -301,19 +396,19 @@ int main(void)
 
     srandom(time(NULL));
 
+    // PART1: Test only key insertion / contains. (ConcSkipList)
+
     // initial serial test.
     // insert elements randomly
     for (ii = 0; ii < 10000; ii++) {
 	val = random() % 10000;
 	if (ref.find(val) != ref.end()) {
-	    // value already present
-	    retVal = t1.insert(val, 0);
-	    assert(retVal == false);
+	    // value already present, still try to insert
+	    t1.insert_default(val);
 	} else {
 	    // value not present
 	    ref.insert(val);
-	    retVal = t1.insert(val, 0);
-	    assert(retVal == true);
+	    t1.insert_default(val);
 	}
     }
     // verify inserted items
@@ -332,11 +427,45 @@ int main(void)
     tbb::task_scheduler_init init(2);
 
     // insert random elements, parallelly
-    parallel_for(full_range, testFunc);
+    parallel_for(full_range, testFuncKey);
 
     // check if insertions happened correctly
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
 	retVal = t1.contains(*iter);
+	assert(retVal == true);
+    }
+
+    // PART2: test actual bit set/test. (ConcSparseIntSet)
+    ref.clear();
+
+    // initial serial test.
+    // insert elements randomly
+    for (ii = 0; ii < 10000; ii++) {
+	val = random() % 10000;
+	if (ref.find(val) != ref.end()) {
+	    // value already present, still try to insert
+	    retVal = t2.set(val);
+	    assert(retVal == false);
+	} else {
+	    // value not present
+	    ref.insert(val);
+	    retVal = t2.set(val);
+	    assert(retVal == true);
+	}
+    }
+    // verify inserted items
+    for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
+	retVal = t2.test(*iter);
+	assert(retVal == true);
+    }
+
+    // parallel now
+    // insert random elements, parallelly
+    parallel_for(full_range, testFuncBit);
+
+    // check if insertions happened correctly
+    for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
+	retVal = t2.test(*iter);
 	assert(retVal == true);
     }
 
