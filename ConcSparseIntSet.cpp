@@ -8,21 +8,6 @@
 
 #include "ConcSparseIntSet.h"
 
-#include <cstdlib>
-#include <cstdio>
-#include <climits>
-#include <cassert>
-#include <cstdint>
-
-#include <tbb/concurrent_vector.h>
-#include <tbb/combinable.h>
-#include <tbb/spin_mutex.h>
-typedef tbb::spin_mutex Lock;
-
-#define MAX_HEIGHT 4
-// below is the wordSize for the value stored in each Node.
-static const uint32_t wordSize = sizeof(uint64_t) * 8;
-
 // This class is just to ensure initialization of an int to 0.
 class Int {
 public:
@@ -33,194 +18,147 @@ public:
 };
 typedef tbb::combinable<Int> threadLocalInt;
 
-class ConcSkipList {
+void ConcSkipList::init(void) {
+    int layer;
+    for (layer = 0; layer < MAX_HEIGHT; layer++)
+	lSentinal.nexts[layer] = &rSentinal;
+    
+    deletedNodes.clear();
+}
 
-    static const int64_t MinInt = -1, MaxInt = INT64_MAX;
-    class Node {
-    public:
-	int64_t key;
-	uint64_t value;
-	
-	int topLayer;
-	
-	Node *nexts[MAX_HEIGHT];
-	bool marked;
-	bool fullyLinked;
-	Lock lock;
-
-	Node(int64_t key, int topLayer, uint64_t value) 
-	{
-	    this->key = key;
-	    this->topLayer = topLayer;
-	    this->value = value;
-	}
-    } lSentinal, rSentinal;
-
-    typedef tbb::concurrent_vector<Node *> DeletedNodesList;
-
-    DeletedNodesList deletedNodes;
-
-    void init(void) {
-	int layer;
-	for (layer = 0; layer < MAX_HEIGHT; layer++)
-	    lSentinal.nexts[layer] = &rSentinal;
-
-	deletedNodes.clear();
-    }
-
-    int findNode(int64_t key, Node *preds[], Node *succs[])
-    {
-	int lFound = -1, layer;
-	Node *pred = &lSentinal, *cur;
-
-	// traverse, from the top most linked list ...
-	for (layer = MAX_HEIGHT-1; layer >= 0; layer--) {
+int ConcSkipList::findNode(int64_t key, Node *preds[], Node *succs[])
+{
+    int lFound = -1, layer;
+    Node *pred = &lSentinal, *cur;
+    
+    // traverse, from the top most linked list ...
+    for (layer = MAX_HEIGHT-1; layer >= 0; layer--) {
+	cur = pred->nexts[layer];
+	// traverse at height "layer" as far as possible
+	while (cur->key < key) {
+	    pred = cur;
 	    cur = pred->nexts[layer];
-	    // traverse at height "layer" as far as possible
-	    while (cur->key < key) {
-		pred = cur;
-		cur = pred->nexts[layer];
-	    }
-	    // below may be optimized as mentioned in the paper
-	    if (lFound == -1 && key == cur->key) {
-		lFound = layer;
-	    }
-	    // last node with a key less than "key" encountered at "layer"
-	    preds[layer] = pred;
-	    // the node that succeeds preds[layer] (at "layer")
-	    succs[layer] = cur;
 	}
-	return lFound;
+	// below may be optimized as mentioned in the paper
+	if (lFound == -1 && key == cur->key) {
+	    lFound = layer;
+	}
+	// last node with a key less than "key" encountered at "layer"
+	preds[layer] = pred;
+	// the node that succeeds preds[layer] (at "layer")
+	succs[layer] = cur;
     }
+    return lFound;
+}
 
-    // returns a random number in the range 0 to MAX_HEIGHT-1.
-    // probability of 1 is 1/2, 2 is 1/4, 3 is 1/8 and so on ...
-    int getRandomHeight(void) 
-    {
-	// code taken from http://eternallyconfuzzled.com/tuts/datastructures/jsw_tut_skip.aspx
-	// this is a very nice article on skip lists. a must read.
-	// The idea to get a random height is simple. Ideally, each successive layer of the skip
-	// list must be half the length, compared to the previous layer lenght (balanced search tree!).
-	// So, the probability that a node has height h+1 is half the probability that it has height h.
-	// Instead of calling rand() multiple times, use the individual bits inside a randomly generated
-	// number. Each bit is 0/1 with a probability of 1/2.
+// returns a random number in the range 0 to MAX_HEIGHT-1.
+// probability of 1 is 1/2, 2 is 1/4, 3 is 1/8 and so on ...
+int ConcSkipList::getRandomHeight(void) 
+{
+    // code taken from http://eternallyconfuzzled.com/tuts/datastructures/jsw_tut_skip.aspx
+    // this is a very nice article on skip lists. a must read.
+    // The idea to get a random height is simple. Ideally, each successive layer of the skip
+    // list must be half the length, compared to the previous layer lenght (balanced search tree!).
+    // So, the probability that a node has height h+1 is half the probability that it has height h.
+    // Instead of calling rand() multiple times, use the individual bits inside a randomly generated
+    // number. Each bit is 0/1 with a probability of 1/2.
 
-	static threadLocalInt bits, reset;
-	int h, found = 0, max = MAX_HEIGHT;
+    static threadLocalInt bits, reset;
+    int h, found = 0, max = MAX_HEIGHT;
 	
-	for (h = 0; !found; h++) {
-	    if (reset.local().val == 0) {
-		// TODO: Use random_r since random() is not thread safe.
-		bits.local().val = random();
-		reset.local().val = sizeof ( int ) * CHAR_BIT;
-	    }
+    for (h = 0; !found; h++) {
+	if (reset.local().val == 0) {
+	    // TODO: Use random_r since random() is not thread safe.
+	    bits.local().val = random();
+	    reset.local().val = sizeof ( int ) * CHAR_BIT;
+	}
 	     
-	    found = bits.local().val & 1;
-	    bits.local().val = bits.local().val >> 1;
-	    --(reset.local().val);
-	}
+	found = bits.local().val & 1;
+	bits.local().val = bits.local().val >> 1;
+	--(reset.local().val);
+    }
  
-	// at this point we must have a number between 1..INF.
-	// anything > max must be equally distributed among 
-	// the possible heights 1..max.
-	if ( h > max ) {
-	    // this is a trick I discovered (not in the link above) which
-	    // seems to provide a more accurate exponential distribution.
-	    h = (h % max) + 1;
+    // at this point we must have a number between 1..INF.
+    // anything > max must be equally distributed among 
+    // the possible heights 1..max.
+    if ( h > max ) {
+	// this is a trick I discovered (not in the link above) which
+	// seems to provide a more accurate exponential distribution.
+	h = (h % max) + 1;
+    }
+
+    // this function must return a number from 0..MAX_HEIGHT-1, hence
+    // decrement h by one (the caller uses this to index array, hence).
+    h--;
+    assert(h >= 0 && h < MAX_HEIGHT);
+    return h;
+}
+
+ConcSkipList::ConcSkipList() : lSentinal(MinInt, MAX_HEIGHT-1, 0) , rSentinal(MaxInt, MAX_HEIGHT-1, 0) 
+{ 
+    lSentinal.fullyLinked = true;
+    rSentinal.fullyLinked = true;
+    init();
+}
+
+// if pKey not already present 
+//   insert pKey with a default 0 value.
+//   return pointer to newly inserted Node.
+// else
+//   return pointer to existing Node with key pKey.
+ConcSkipList::Node *ConcSkipList::insert_default(uint32_t pKey)
+{
+    // the internal container for key is bigger than what
+    // is supported from outside. This is to accomodate MaxInt and MinInt
+    int64_t key = (int64_t) pKey;
+    int topLayer = getRandomHeight();
+    Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT], *nodeFound;
+    Node *pred, *succ, *prevPred, *newNode;
+    int lFound, highestLocked, layer;
+    bool valid;
+    
+    while (true) {
+	lFound = findNode(key, preds, succs);
+	if (lFound != -1) {
+	    // Node found ... 
+	    nodeFound = succs[lFound];
+	    // but is it being deleted?
+	    if (!nodeFound->marked) {
+		// not being deleted, but is it being just inserted (linked)?
+		while (!nodeFound->fullyLinked) {
+		    // the node is being linked, wait for
+		    // it to be fully inserted (linked).
+		    // TODL: this looks very bad, maybe
+		    // add some delay? how much? how?
+		    ;
+		}
+		return nodeFound;
+	    }
+	    // The node is being deleted, try again till 
+	    // it has been fully deleted. findNode() will
+	    // stop returning "found" once its deleted fully.
+	    // TODO: is a wait needed here too?
+	    continue;
 	}
-
-	// this function must return a number from 0..MAX_HEIGHT-1, hence
-	// decrement h by one (the caller uses this to index array, hence).
-	h--;
-	assert(h >= 0 && h < MAX_HEIGHT);
-	return h;
-    }
-
-public:
-    ConcSkipList() : lSentinal(MinInt, MAX_HEIGHT-1, 0) , rSentinal(MaxInt, MAX_HEIGHT-1, 0) 
-    { 
-	init();
-    }
-
-    // if pKey not already present 
-    //   insert pKey with a default 0 value.
-    //   return pointer to newly inserted Node.
-    // else
-    //   return pointer to existing Node with key pKey.
-    Node *insert_default(uint32_t pKey)
-    {
-	// the internal container for key is bigger than what
-	// is supported from outside. This is to accomodate MaxInt and MinInt
-	int64_t key = (int64_t) pKey;
-	int topLayer = getRandomHeight();
-	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT], *nodeFound;
-	Node *pred, *succ, *prevPred, *newNode;
-	int lFound, highestLocked, layer;
-	bool valid;
-
-	while (true) {
-	    lFound = findNode(key, preds, succs);
-	    if (lFound != -1) {
-		// Node found ... 
-		nodeFound = succs[lFound];
-		// but is it being deleted?
-		if (!nodeFound->marked) {
-		    // not being deleted, but is it being just inserted (linked)?
-		    while (!nodeFound->fullyLinked) {
-			// the node is being linked, wait for
-			// it to be fully inserted (linked).
-			// TODL: this looks very bad, maybe
-			// add some delay? how much? how?
-			;
-		    }
-		    return nodeFound;
-		}
-		// The node is being deleted, try again till 
-		// it has been fully deleted. findNode() will
-		// stop returning "found" once its deleted fully.
-		// TODO: is a wait needed here too?
-		continue;
+	highestLocked = -1;
+	prevPred = NULL;
+	valid = true;
+	for (layer = 0; layer <= topLayer && valid; layer++) {
+	    pred = preds[layer];
+	    succ = succs[layer];
+	    // don't want to lock the same node multiple times ...
+	    if (pred != prevPred) {
+		pred->lock.lock();
+		highestLocked = layer;
+		prevPred = pred;
 	    }
-	    highestLocked = -1;
+	    valid = !pred->marked && !succ->marked && 
+		pred->nexts[layer] == succ;
+	}
+	if (!valid) {
 	    prevPred = NULL;
-	    valid = true;
-	    for (layer = 0; layer <= topLayer && valid; layer++) {
-		pred = preds[layer];
-		succ = succs[layer];
-		// don't want to lock the same node multiple times ...
-		if (pred != prevPred) {
-		    pred->lock.lock();
-		    highestLocked = layer;
-		    prevPred = pred;
-		}
-		valid = !pred->marked && !succ->marked && 
-		    pred->nexts[layer] == succ;
-	    }
-	    if (!valid) {
-		prevPred = NULL;
-		// release locks and continue
-		for (layer = 0; layer <= highestLocked; layer++) {
-		    pred = preds[layer];
-		    // don't want to unlock the same node multiple times ...
-		    if (pred != prevPred) {
-			pred->lock.unlock();
-			prevPred = pred;
-		    }
-		}
-		continue;
-	    }
-	    
-	    // if we're here, it means we've got all the necessary locks. its now
-	    // safe to do the linked list operations for lists at all levels.
-	    newNode = new Node(key, topLayer, 0);
-	    for (layer = 0; layer <= topLayer; layer++)  {
-		newNode->nexts[layer] = succs[layer];
-		preds[layer]->nexts[layer] = newNode;
-	    }
-	    newNode->fullyLinked = true;
-	    prevPred = NULL;
-	    // release locks and return
-	    for (layer = 0; layer <= highestLocked && valid; layer++) {
+	    // release locks and continue
+	    for (layer = 0; layer <= highestLocked; layer++) {
 		pred = preds[layer];
 		// don't want to unlock the same node multiple times ...
 		if (pred != prevPred) {
@@ -228,107 +166,184 @@ public:
 		    prevPred = pred;
 		}
 	    }
-	    return newNode;
-	}
-    }
-
-    bool contains(uint32_t pKey) {
-	// the internal container for key is bigger than what
-	// is supported from outside. This is to accomodate MaxInt and MinInt
-	int64_t key = (int64_t) pKey;
-	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
-	int lFound = findNode (key, preds, succs);
-
-	return (lFound != -1 &&
-		succs[lFound]->fullyLinked &&
-		!succs[lFound]->marked);
-    }
-
-    // this is the interface used for adding bits, by the covering
-    // sparse bit vector. this will atomically add "bit" to the node
-    // corresponding to pKey (with such a node being added newly if necessary).
-    // returns true if bit was newly set.
-    bool add_key_bit(uint32_t pKey, uint32_t bit) {
-	Node *node;
-	uint64_t value1, value2;
-
-	assert(bit < wordSize);
-
-	node = insert_default(pKey);
-	assert(node != NULL);
-
-	node->lock.lock();
-	value1 = node->value;
-	value2 = value1 | ((uint64_t)1 << bit);
-	node->value = value2;
-	node->lock.unlock();
-
-	return (value1 != value2);
-    }
-
-    bool test_key_bit(uint32_t pKey, uint32_t bit) {
-	int64_t key = (int64_t) pKey;
-	Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
-	int lFound = findNode (key, preds, succs);
-
-	assert(bit < wordSize);
-
-	return (lFound != -1 &&
-		succs[lFound]->fullyLinked &&
-		!succs[lFound]->marked &&
-		(succs[lFound]->value & ((uint64_t)1 << bit)));
-
-    }
-
-    // not thread safe
-    void clear_unsafe(void) {
-	Node *ptr1, *ptr2;
-	DeletedNodesList::iterator iter;
-
-	// free elements on the list
-	for (ptr1 = lSentinal.nexts[0]; ptr1 != &rSentinal; ptr1 = ptr2) {
-	    ptr2 = ptr1->nexts[0];
-	    free(ptr1);
-	}
-	// free elements that were deleted
-	for (iter = deletedNodes.begin(); iter != deletedNodes.end(); iter++) {
-	    free(*iter);
-	}
-
-	init();
-    }
-
-    ~ConcSkipList() {
-	clear_unsafe();
-    }
-
-    class ConcSkipListIterator {
-	ConcSkipList *sl;
-	Node *curNode;
-
-    public:
-	uint32_t key;
-	uint64_t value;
-
-	ConcSkipListIterator(ConcSkipList &sl, Node *startFrom = NULL) {
-	    this->sl = &sl;
-	    if (startFrom == NULL) {
-		this->curNode = sl.lSentinal.nexts[0];
-	    } else {
-		assert(startFrom != &(sl.lSentinal));
-		this->curNode = startFrom;
-	    }
-	    if (curNode != &(sl.rSentinal)) {
-		// curNode->key must hav a valid value.
-		assert(curNode->key > MinInt && curNode->key < MaxInt);
-		key = (uint32_t) curNode->key;
-		value = (uint64_t) curNode->value;
-	    }
+	    continue;
 	}
 	
-    };
-    typedef ConcSkipListIterator iterator;
-};
+	// if we're here, it means we've got all the necessary locks. its now
+	// safe to do the linked list operations for lists at all levels.
+	newNode = new Node(key, topLayer, 0);
+	for (layer = 0; layer <= topLayer; layer++)  {
+	    newNode->nexts[layer] = succs[layer];
+	    preds[layer]->nexts[layer] = newNode;
+	}
+	newNode->fullyLinked = true;
+	prevPred = NULL;
+	// release locks and return
+	for (layer = 0; layer <= highestLocked && valid; layer++) {
+	    pred = preds[layer];
+	    // don't want to unlock the same node multiple times ...
+	    if (pred != prevPred) {
+		pred->lock.unlock();
+		prevPred = pred;
+	    }
+	}
+	return newNode;
+    }
+}
+
+bool ConcSkipList::contains(uint32_t pKey) 
+{
+    // the internal container for key is bigger than what
+    // is supported from outside. This is to accomodate MaxInt and MinInt
+    int64_t key = (int64_t) pKey;
+    Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
+    int lFound = findNode (key, preds, succs);
+
+    return (lFound != -1 &&
+	    succs[lFound]->fullyLinked &&
+	    !succs[lFound]->marked);
+}
+
+// this is the interface used for adding bits, by the covering
+// sparse bit vector. this will atomically add "bit" to the node
+// corresponding to pKey (with such a node being added newly if necessary).
+// returns true if bit was newly set.
+bool ConcSkipList::add_key_bit(uint32_t pKey, uint32_t bit) 
+{
+    Node *node;
+    uint64_t value1, value2;
+
+    assert(bit < wordSize);
+
+    node = insert_default(pKey);
+    assert(node != NULL);
+
+    node->lock.lock();
+    value1 = node->value;
+    value2 = value1 | ((uint64_t)1 << bit);
+    node->value = value2;
+    node->lock.unlock();
+
+    return (value1 != value2);
+}
+
+bool ConcSkipList::test_key_bit(uint32_t pKey, uint32_t bit) 
+{
+    int64_t key = (int64_t) pKey;
+    Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
+    int lFound = findNode (key, preds, succs);
+
+    assert(bit < wordSize);
+
+    return (lFound != -1 &&
+	    succs[lFound]->fullyLinked &&
+	    !succs[lFound]->marked &&
+	    (succs[lFound]->value & ((uint64_t)1 << bit)));
+
+}
+
+// not thread safe
+void ConcSkipList::clear_unsafe(void) 
+{
+    Node *ptr1, *ptr2;
+    DeletedNodesList::iterator iter;
+    
+    // free elements on the list
+    for (ptr1 = lSentinal.nexts[0]; ptr1 != &rSentinal; ptr1 = ptr2) {
+	ptr2 = ptr1->nexts[0];
+	free(ptr1);
+    }
+    // free elements that were deleted
+    for (iter = deletedNodes.begin(); iter != deletedNodes.end(); iter++) {
+	free(*iter);
+    }
+    
+    init();
+}
+
+ConcSkipList::~ConcSkipList() 
+{
+    clear_unsafe();
+}
+
+ConcSkipList::ConcSkipListIterator::ConcSkipListIterator
+(ConcSkipList &sl, ConcSkipList::Node *startFrom)
+{
+    // set this->sl
+    this->sl = &sl;
+    // set curNode
+    if (startFrom == NULL) {
+	this->curNode = sl.lSentinal.nexts[0];
+    } else {
+	// cannot start from lSentinal 
+	// (doesn't make sense to do operator* then).
+	assert(startFrom != &(sl.lSentinal));
+	this->curNode = startFrom;
+    }
+    // set key/value
+    if (curNode != &(sl.rSentinal)) {
+	// curNode->key must hav a valid value.
+	assert(curNode->key > MinInt && curNode->key < MaxInt);
+	key = (uint32_t) curNode->key;
+	value = (uint64_t) curNode->value;
+    }
+}
+	
+ConcSkipList::KeyValPair ConcSkipList::ConcSkipListIterator::operator* ()
+{
+    return KeyValPair(key, value);
+}
+
+ConcSkipList::ConcSkipListIterator &ConcSkipList::ConcSkipListIterator::operator++ () 
+{
+    // cannot move past the end. also NULL is never possible.
+    assert(curNode != NULL && curNode != &(sl->rSentinal));
+    // this cannot happen as per above assert. just putting it
+    // in for safety in non-debug code. is it a good thing?
+    if (curNode == &sl->rSentinal)
+	return *this;
+
+    curNode = curNode->nexts[0];
+
+    // wait until curNode is fullyLinked.
+    // note that that i don't care much about marked (for deletion)
+    // nodes. its always safe to iterate through marked nodes.
+    while (!curNode->fullyLinked) {
+	// perhaps a better way to wait? see ConcSkipList::insert_default().
+	;
+    }
+
+    if (curNode != &(sl->rSentinal)) {
+	// curNode->key must hav a valid value.
+	assert(curNode->key > MinInt && curNode->key < MaxInt);
+	key = (uint32_t) curNode->key;
+	value = (uint64_t) curNode->value;
+    } else {
+	// what does this mean?
+	key = 0;
+	value = 0;
+    }
+    return *this;
+}
+
+bool ConcSkipList::ConcSkipListIterator::operator== (const ConcSkipList::ConcSkipListIterator &rhs) 
+{
+    return (sl == rhs.sl && curNode == rhs.curNode);
+}
+
+bool ConcSkipList::ConcSkipListIterator::operator!= (const ConcSkipList::ConcSkipListIterator &rhs) 
+{
+    return !(*this == rhs);
+}
+
+ConcSkipList::ConcSkipListIterator ConcSkipList::begin() 
+{
+    return iterator(*this);
+}
+ConcSkipList::ConcSkipListIterator ConcSkipList::end() 
+{
+    return iterator(*this, &(this->rSentinal));
+}
 
 // Now start on the sparse bit vector using the concurrent skip list above.
 
@@ -469,6 +484,11 @@ int main(void)
     // check if insertions happened correctly
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
 	retVal = t1.contains(*iter);
+	assert(retVal == true);
+    }
+    // TODO: need to do some parallel testing for iterators too ...
+    for (ConcSkipList::iterator iter = t1.begin(); iter != t1.end(); ++iter) {
+	retVal = (ref.find((*iter).first) != ref.end());
 	assert(retVal == true);
     }
 
