@@ -13,6 +13,7 @@
 #include <climits>
 #include <cassert>
 
+#include <tbb/concurrent_vector.h>
 #include <tbb/combinable.h>
 #include <tbb/spin_mutex.h>
 typedef tbb::spin_mutex Lock;
@@ -52,10 +53,16 @@ class ConcSkipList {
 	}
     } lSentinal, rSentinal;
 
+    typedef tbb::concurrent_vector<Node *> DeletedNodesList;
+
+    DeletedNodesList deletedNodes;
+
     void init(void) {
 	int layer;
 	for (layer = 0; layer < MAX_HEIGHT; layer++)
 	    lSentinal.nexts[layer] = &rSentinal;
+
+	deletedNodes.clear();
     }
 
     int findNode(signed long key, Node *preds[], Node *succs[])
@@ -221,11 +228,23 @@ public:
     // not thread safe
     void clear_unsafe(void) {
 	Node *ptr1, *ptr2;
+	DeletedNodesList::iterator iter;
+
+	// free elements on the list
 	for (ptr1 = &lSentinal; ptr1 != &rSentinal; ptr1 = ptr2) {
 	    ptr2 = ptr1->nexts[0];
 	    free(ptr1);
 	}
+	// free elements that were deleted
+	for (iter = deletedNodes.begin(); iter != deletedNodes.end(); iter++) {
+	    free(*iter);
+	}
+
 	init();
+    }
+
+    ~ConcSkipList() {
+	clear_unsafe();
     }
 };
 
@@ -283,6 +302,7 @@ int main(void)
     srandom(time(NULL));
 
     // initial serial test.
+    // insert elements randomly
     for (ii = 0; ii < 10000; ii++) {
 	val = random() % 10000;
 	if (ref.find(val) != ref.end()) {
@@ -296,6 +316,7 @@ int main(void)
 	    assert(retVal == true);
 	}
     }
+    // verify inserted items
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
 	retVal = t1.contains(*iter);
 	assert(retVal == true);
@@ -308,10 +329,12 @@ int main(void)
     }
 
     tbb::blocked_range<unsigned> full_range(0, size, 5);
-
     tbb::task_scheduler_init init(2);
+
+    // insert random elements, parallelly
     parallel_for(full_range, testFunc);
 
+    // check if insertions happened correctly
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
 	retVal = t1.contains(*iter);
 	assert(retVal == true);
