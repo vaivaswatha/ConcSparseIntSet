@@ -46,6 +46,8 @@ class ConcSkipList {
 	    this->key = key;
 	    this->topLayer = topLayer;
 	    this->value = value;
+	    this->marked = false;
+	    this->fullyLinked = false;
 	}
     } lSentinal, rSentinal;
 
