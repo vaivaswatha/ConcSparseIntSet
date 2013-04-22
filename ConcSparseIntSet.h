@@ -112,6 +112,7 @@ class ConcSparseIntSet {
     // return true if newly set.
     inline bool test_and_set(unsigned bit);
     inline bool test(unsigned bit);
+    inline bool empty(void);
 
     class ConcSparseIntSetIterator {
 	ConcSkipList *sl;

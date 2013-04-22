@@ -398,6 +398,11 @@ bool ConcSparseIntSet::test(uint32_t bit)
     return (this->sl->testKeyBit(base, offset));
 }
 
+bool ConcSparseIntSet::empty(void)
+{
+    return begin() == end();
+}
+
 // returns the first set bit in "word", starting from "off".
 // if there are none, it return wordSize.
 uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::firstSet(uint64_t val, uint32_t off) 
@@ -616,6 +621,7 @@ int main(void)
 
     // PART2: test actual bit set/test. (ConcSparseIntSet)
     ref.clear();
+    assert(t2.empty());
 
     // initial serial test.
     // insert elements randomly
@@ -652,6 +658,8 @@ int main(void)
 	retVal = (ref.find(*iter) != ref.end());
 	assert(retVal == true);
     }
+
+    assert(!t2.empty());
 
     return 0;
 }
