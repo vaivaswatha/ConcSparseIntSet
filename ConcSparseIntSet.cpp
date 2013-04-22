@@ -65,17 +65,18 @@ int ConcSkipList::getRandomHeight(void)
 
     static threadLocalInt bits, reset;
     int h, found = 0, max = MAX_HEIGHT;
+    int &bitsLocal = bits.local().val, &resetLocal = reset.local().val;
 	
     for (h = 0; !found; h++) {
-	if (reset.local().val == 0) {
+	if (resetLocal == 0) {
 	    // TODO: Use random_r since random() is not thread safe.
-	    bits.local().val = random();
-	    reset.local().val = sizeof ( int ) * CHAR_BIT;
+	    bitsLocal = random();
+	    resetLocal = sizeof ( int ) * CHAR_BIT;
 	}
 	     
-	found = bits.local().val & 1;
-	bits.local().val = bits.local().val >> 1;
-	--(reset.local().val);
+	found = bitsLocal & 1;
+	bitsLocal = bitsLocal >> 1;
+	--(resetLocal);
     }
  
     // at this point we must have a number between 1..INF.
