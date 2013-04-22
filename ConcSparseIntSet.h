@@ -7,11 +7,11 @@
 #define _CONC_SPARSE_INT_SET
 
 #include <cstdlib>
-#include <cstdio>
 #include <climits>
 #include <cassert>
 #include <cstdint>
 #include <utility>
+#include <iostream>
 
 #include <tbb/concurrent_vector.h>
 #include <tbb/combinable.h>
@@ -85,6 +85,7 @@ class ConcSkipList {
 	uint64_t value;
 
 	// constructor for the iterator
+	ConcSkipListIterator() { sl = NULL; curNode = NULL; };
 	ConcSkipListIterator(ConcSkipList &sl, ConcSkipList::Node *startFrom = NULL);
 	KeyValPair operator* ();
 	ConcSkipListIterator &operator++ ();
@@ -107,7 +108,9 @@ class ConcSparseIntSet {
  public:
     ConcSparseIntSet();
     ~ConcSparseIntSet();
-    inline bool set(unsigned bit);
+    inline void set(unsigned bit);
+    // return true if newly set.
+    inline bool test_and_set(unsigned bit);
     inline bool test(unsigned bit);
 
     class ConcSparseIntSetIterator {
@@ -116,11 +119,13 @@ class ConcSparseIntSet {
 	uint32_t curOff;
 	// returns the first set bit in "word", starting from "off".
 	// if there are none, it return wordSize.
-	uint32_t firstSet(uint32_t word, uint32_t off);
+	uint32_t firstSet(uint64_t word, uint32_t off);
 
     public:
+	ConcSparseIntSetIterator() { sl = NULL; };
 	ConcSparseIntSetIterator(ConcSkipList &sl, ConcSkipList::iterator &sli);
 	uint32_t operator* ();
+	// TODO: define a post-increment operator too.
 	ConcSparseIntSetIterator &operator++ ();
 	bool operator== (const ConcSparseIntSetIterator &rhs);
 	bool operator!= (const ConcSparseIntSetIterator &rhs);
@@ -128,6 +133,7 @@ class ConcSparseIntSet {
     typedef ConcSparseIntSetIterator iterator;
     inline iterator begin();
     inline iterator end();
+    void print (std::ostream &file);
 };
 
 #endif // _CONC_SPARSE_INT_SET

@@ -251,11 +251,11 @@ void ConcSkipList::clearUnsafe(void)
     // free elements on the list
     for (ptr1 = lSentinal.nexts[0]; ptr1 != &rSentinal; ptr1 = ptr2) {
 	ptr2 = ptr1->nexts[0];
-	free(ptr1);
+	delete ptr1;
     }
     // free elements that were deleted
     for (iter = deletedNodes.begin(); iter != deletedNodes.end(); iter++) {
-	free(*iter);
+	delete *iter;
     }
     
     init();
@@ -286,6 +286,10 @@ ConcSkipList::ConcSkipListIterator::ConcSkipListIterator
 	assert(curNode->key > MinInt && curNode->key < MaxInt);
 	key = (uint32_t) curNode->key;
 	value = (uint64_t) curNode->value;
+    } else {
+	// what does this mean?
+	key = 0;
+	value = 0;
     }
 }
 	
@@ -369,12 +373,21 @@ ConcSparseIntSet::~ConcSparseIntSet()
     delete sl;
 }
 
-bool ConcSparseIntSet::set(uint32_t bit)
+// return true if newly set
+bool ConcSparseIntSet::test_and_set(uint32_t bit)
 {
     uint32_t base, offset;
     
     get_base_off(bit, &base, &offset);
     return (this->sl->addKeyBit(base, offset));
+}
+
+void ConcSparseIntSet::set(uint32_t bit)
+{
+    uint32_t base, offset;
+    
+    get_base_off(bit, &base, &offset);
+    this->sl->addKeyBit(base, offset);
 }
 
 bool ConcSparseIntSet::test(uint32_t bit)
@@ -387,7 +400,7 @@ bool ConcSparseIntSet::test(uint32_t bit)
 
 // returns the first set bit in "word", starting from "off".
 // if there are none, it return wordSize.
-uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::firstSet(uint32_t val, uint32_t off) 
+uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::firstSet(uint64_t val, uint32_t off) 
 {
     // off == wordSize when iterator (caller) has reached end
     // we don't do anything in that case but just return the same.
@@ -409,7 +422,7 @@ ConcSparseIntSet::ConcSparseIntSetIterator::ConcSparseIntSetIterator
 	return;
 
     // check if curOff bit is indeed set
-    if ((*sli).second & ((uint32_t)1 << curOff)) {
+    if ((*sli).second & ((uint64_t)1 << curOff)) {
 	// yes it is, nothing more to do
 	return;
     } else {
@@ -456,7 +469,7 @@ ConcSparseIntSet::ConcSparseIntSetIterator &ConcSparseIntSet::ConcSparseIntSetIt
 
 bool ConcSparseIntSet::ConcSparseIntSetIterator::operator== (const ConcSparseIntSetIterator &rhs)
 {
-    return (sl == sl && sli == sli && curOff == curOff);
+    return (sl == rhs.sl && sli == rhs.sli && curOff == rhs.curOff);
 }
 
 bool ConcSparseIntSet::ConcSparseIntSetIterator::operator!= (const ConcSparseIntSetIterator &rhs)
@@ -476,6 +489,13 @@ ConcSparseIntSet::ConcSparseIntSetIterator ConcSparseIntSet::end()
     return ConcSparseIntSetIterator(*(this->sl), sli);
 }
 
+void ConcSparseIntSet::print(std::ostream &file)
+{
+    for (ConcSparseIntSet::iterator iter = begin(); iter != end(); ++iter) {
+	file << (*iter) << " ";
+    }
+    file << std::endl;
+}
 
 // Uncomment below line to enable testing. Has a main() routine.
 #define TEST_CONC_SPARSE_INT_SET
@@ -521,17 +541,23 @@ struct TestFuncBit {
     {
 	uint32_t ii, val;
 	bool retVal;
+	ConcSparseIntSet::iterator iter;
 
 	for (ii = range.begin(); ii < range.end(); ii++) {
 	    val = input[ii];
 	    if (ref.find(val) != ref.end()) {
-		// value already present, still try to insert
-		retVal = t2.set(val);
-		assert(retVal == false);
+		// value already exists in the set.
+		// See if the value can be reached through an iterator.
+		// This is just to do some parallel testing for iterators.
+		for (iter = t2.begin(); iter != t2.end(); ++iter) {
+		    if (*iter == val)
+			break;
+		}
+		assert(iter != t2.end());
 	    } else {
 		// value not present
 		ref.insert(val);
-		retVal = t2.set(val);
+		retVal = t2.test_and_set(val);
 		assert(retVal == true);
 	    }
 	}
@@ -544,6 +570,7 @@ int main(void)
     time_t curTime;
 
     curTime = time(NULL);
+    curTime = 1366612855;
     srandom(curTime);
     printf("seed=%lu\n", curTime);
 
@@ -600,12 +627,12 @@ int main(void)
 	val = random() % 10000;
 	if (ref.find(val) != ref.end()) {
 	    // value already present, still try to insert
-	    retVal = t2.set(val);
+	    retVal = t2.test_and_set(val);
 	    assert(retVal == false);
 	} else {
 	    // value not present
 	    ref.insert(val);
-	    retVal = t2.set(val);
+	    retVal = t2.test_and_set(val);
 	    assert(retVal == true);
 	}
     }
@@ -624,7 +651,7 @@ int main(void)
 	retVal = t2.test(*iter);
 	assert(retVal == true);
     }
-    // TODO: need to do some parallel testing for iterators too ...
+
     for (ConcSparseIntSet::iterator iter = t2.begin(); iter != t2.end(); ++iter) {
 	retVal = (ref.find(*iter) != ref.end());
 	assert(retVal == true);
