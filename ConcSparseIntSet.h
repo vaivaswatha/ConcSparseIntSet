@@ -113,7 +113,10 @@ class ConcSparseIntSet {
     class ConcSparseIntSetIterator {
 	ConcSkipList *sl;
 	ConcSkipList::iterator sli;
-	uint32_t currOff;
+	uint32_t curOff;
+	// returns the first set bit in "word", starting from "off".
+	// if there are none, it return wordSize.
+	uint32_t firstSet(uint32_t word, uint32_t off);
 
     public:
 	ConcSparseIntSetIterator(ConcSkipList &sl, ConcSkipList::iterator &sli);

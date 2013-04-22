@@ -291,6 +291,7 @@ ConcSkipList::ConcSkipListIterator::ConcSkipListIterator
 	
 ConcSkipList::KeyValPair ConcSkipList::ConcSkipListIterator::operator* ()
 {
+    assert(curNode != &sl->lSentinal && curNode != &sl->rSentinal);
     return KeyValPair(key, value);
 }
 
@@ -347,9 +348,15 @@ ConcSkipList::ConcSkipListIterator ConcSkipList::end()
 
 // Now start on the sparse bit vector using the concurrent skip list above.
 
-static inline void get_base_off(uint32_t bit, uint32_t *base, uint32_t *off) {
+static inline void get_base_off(uint32_t bit, uint32_t *base, uint32_t *off) 
+{
     *base = bit / wordSize;
     *off = bit % wordSize;
+}
+
+static inline uint32_t get_bit_from_base_off(uint32_t base, uint32_t off)
+{
+    return ((base * wordSize) + off);
 }
 
 ConcSparseIntSet::ConcSparseIntSet()
@@ -378,31 +385,97 @@ bool ConcSparseIntSet::test(uint32_t bit)
     return (this->sl->testKeyBit(base, offset));
 }
 
+// returns the first set bit in "word", starting from "off".
+// if there are none, it return wordSize.
+uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::firstSet(uint32_t val, uint32_t off) 
+{
+    // off == wordSize when iterator (caller) has reached end
+    // we don't do anything in that case but just return the same.
+    assert(off <= wordSize);
+    uint64_t tmp = ((uint64_t) 1) << off;
+    while (off < wordSize && (tmp & val) == 0) {
+	off++;
+	tmp = (tmp << 1);
+    }
+    return off;
+}
+
 ConcSparseIntSet::ConcSparseIntSetIterator::ConcSparseIntSetIterator
 (ConcSkipList &sl, ConcSkipList::ConcSkipListIterator &sli) : sl(&sl), sli(sli)
 {
-    ;
+    curOff = 0;
+
+    if (sli == sl.end())
+	return;
+
+    // check if curOff bit is indeed set
+    if ((*sli).second & ((uint32_t)1 << curOff)) {
+	// yes it is, nothing more to do
+	return;
+    } else {
+	// bit not set, look for the next set bit.
+	++(*this);
+    }
 }
 
 uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::operator* ()
 {
-    return 0;
+    uint32_t base, offset;
+    // cannot indirect the iterator after it has reached its end.
+    assert(sli != sl->end());
+
+    base = (*sli).first;
+    offset = curOff;
+
+    return get_bit_from_base_off(base, offset);
 }
 
 ConcSparseIntSet::ConcSparseIntSetIterator &ConcSparseIntSet::ConcSparseIntSetIterator::operator++ ()
 {
+    assert(sli != sl->end());
+    curOff = (curOff + 1);
+    // if we've reached end, it'll be equal to wordSize, but never more
+    assert (curOff <= wordSize); 
+    curOff = firstSet((*sli).second, curOff);
+    while (curOff == wordSize) {
+	curOff = 0;
+	// we need a loop because there are chances
+	// of empty node, when it was just inserted
+	// by another thread and it hasn't set a bit
+	// yet. Hopefully this won't happen much.
+	++sli;
+	if (sli == sl->end()) {
+	    curOff = 0; // makes it simpler to implement ==
+	    return *this;
+	}
+	curOff = firstSet((*sli).second, curOff);
+    }
+
     return *this;
 }
 
 bool ConcSparseIntSet::ConcSparseIntSetIterator::operator== (const ConcSparseIntSetIterator &rhs)
 {
-    return true;
+    return (sl == sl && sli == sli && curOff == curOff);
 }
 
 bool ConcSparseIntSet::ConcSparseIntSetIterator::operator!= (const ConcSparseIntSetIterator &rhs)
 {
-    return false;
+    return !(*this == rhs);
 }
+
+ConcSparseIntSet::ConcSparseIntSetIterator ConcSparseIntSet::begin()
+{
+    ConcSkipList::iterator sli = this->sl->begin();;
+    return ConcSparseIntSetIterator(*(this->sl), sli);
+}
+
+ConcSparseIntSet::ConcSparseIntSetIterator ConcSparseIntSet::end()
+{
+    ConcSkipList::iterator sli = this->sl->end();;
+    return ConcSparseIntSetIterator(*(this->sl), sli);
+}
+
 
 // Uncomment below line to enable testing. Has a main() routine.
 #define TEST_CONC_SPARSE_INT_SET
@@ -549,6 +622,11 @@ int main(void)
     // check if insertions happened correctly
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {
 	retVal = t2.test(*iter);
+	assert(retVal == true);
+    }
+    // TODO: need to do some parallel testing for iterators too ...
+    for (ConcSparseIntSet::iterator iter = t2.begin(); iter != t2.end(); ++iter) {
+	retVal = (ref.find(*iter) != ref.end());
 	assert(retVal == true);
     }
 
