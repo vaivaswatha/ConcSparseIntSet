@@ -10,7 +10,10 @@ Requirements:
 - GCC with support for the new c++11 standard (-std=c++0x)
 
 Usage:
-- Include the ConcSparseIntSet.h in your program.
+- Include the ConcSparseIntSet.h in your program. The public member of class
+  "ConcSparseIntSet" in this file is the interface to the data structure. 
+  Look at this interface for details on how to use. You can also look at
+  the testsuite (discussed later) on how to use the data structure.
 - Make sure ConcSparseIntSet.cpp is also compiled along with your program.
 - Link with TBB. (i.e, "-ltbb" option needs to be passed to GCC)
 - Tell GCC to use c++11 standard (use the "-std=c++0x" option for GCC).
@@ -20,6 +23,9 @@ Usage:
   Note that the above macro will enable/define a "main" function which will
   test the concurrent sparse int set, so your program cannot have a "main".
   The best way to test is to compile this in isolation to avoid conflict.
+  Example:
+	g++ -DTEST_CONC_SPARSE_INT_SET -Wall -std=c++0x ConcSparseIntSet.cpp -ltbb
+  This will compile the data structure. Running the compiled program will run the testsuite.
 
 TODO:
 - Need to implement item removal from the skip list, and hence bit reset operation.
