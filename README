@@ -1,8 +1,9 @@
 Concurrent Sparse Integer Set (bit vector based concurrent set) - Vaivaswatha N
 
 - A concurrent sparse bit vector implementation based on concurrent skip lists
-- Concurrent skip lists based on the paper by Herlihy et al, available oneline at
+- Concurrent skip lists based on the paper by Herlihy et al, available online at
   http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.89.561 
+  (A Provably Correct Scalable Concurrent Skip List)
 
 Requirements:
 - Intel's TBB (on Ubuntu/Debian, you can install as "sudo apt-get install tbb")
