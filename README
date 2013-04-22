@@ -1,0 +1,24 @@
+Concurrent Sparse Integer Set (bit vector based concurrent set) - Vaivaswatha N
+
+- A concurrent sparse bit vector implementation based on concurrent skip lists
+- Concurrent skip lists based on the paper by Herlihy et al, available oneline at
+  http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.89.561 
+
+Requirements:
+- Intel's TBB (on Ubuntu/Debian, you can install as "sudo apt-get install tbb")
+- GCC with support for the new c++11 standard (-std=c++0x)
+
+Usage:
+- Include the ConcSparseIntSet.h in your program.
+- Make sure ConcSparseIntSet.cpp is also compiled along with your program.
+- Link with TBB. (i.e, "-ltbb" option needs to be passed to GCC)
+- Tell GCC to use c++11 standard (use the "-std=c++0x" option for GCC).
+- There is a small inbuilt testsuite. This can be enabled by defining the
+  macro TEST_CONC_SPARSE_INT_SET while compiling. 
+  (pass -DTEST_CONC_SPARSE_INT_SET to GCC).
+  Note that the above macro will enable/define a "main" function which will
+  test the concurrent sparse int set, so your program cannot have a "main".
+  The best way to test is to compile this in isolation to avoid conflict.
+
+TODO:
+- Need to implement item removal from the skip list, and hence bit reset operation.
