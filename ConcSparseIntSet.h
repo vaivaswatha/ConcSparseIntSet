@@ -94,8 +94,8 @@ class ConcSkipList {
     };
     typedef ConcSkipListIterator iterator;
     
-    inline iterator begin();
-    inline iterator end();
+    iterator begin();
+    iterator end();
 };
 
 class ConcSparseIntSet {
@@ -108,11 +108,11 @@ class ConcSparseIntSet {
  public:
     ConcSparseIntSet();
     ~ConcSparseIntSet();
-    inline void set(unsigned bit);
+    void set(unsigned bit);
     // return true if newly set.
-    inline bool test_and_set(unsigned bit);
-    inline bool test(unsigned bit);
-    inline bool empty(void);
+    bool test_and_set(unsigned bit);
+    bool test(unsigned bit);
+    bool empty(void);
 
     class ConcSparseIntSetIterator {
 	ConcSkipList *sl;
@@ -132,8 +132,8 @@ class ConcSparseIntSet {
 	bool operator!= (const ConcSparseIntSetIterator &rhs);
     };
     typedef ConcSparseIntSetIterator iterator;
-    inline iterator begin();
-    inline iterator end();
+    iterator begin();
+    iterator end();
     void print (std::ostream &file);
 };
 
