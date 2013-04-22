@@ -497,9 +497,6 @@ void ConcSparseIntSet::print(std::ostream &file)
     file << std::endl;
 }
 
-// Uncomment below line to enable testing. Has a main() routine.
-#define TEST_CONC_SPARSE_INT_SET
-
 // Everything below is just testing code
 #ifdef TEST_CONC_SPARSE_INT_SET
 
