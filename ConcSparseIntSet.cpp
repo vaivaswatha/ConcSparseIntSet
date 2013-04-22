@@ -570,7 +570,6 @@ int main(void)
     time_t curTime;
 
     curTime = time(NULL);
-    curTime = 1366612855;
     srandom(curTime);
     printf("seed=%lu\n", curTime);
 
@@ -602,7 +601,7 @@ int main(void)
     }
 
     tbb::blocked_range<uint32_t> full_range(0, size, 5);
-    tbb::task_scheduler_init init(1);
+    tbb::task_scheduler_init init(4);
 
     // insert random elements, parallelly
     parallel_for(full_range, testFuncKey);
