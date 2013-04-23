@@ -14,7 +14,6 @@
 #include <iostream>
 
 #include <tbb/concurrent_vector.h>
-#include <tbb/combinable.h>
 #include <tbb/spin_mutex.h>
 typedef tbb::spin_mutex Lock;
 

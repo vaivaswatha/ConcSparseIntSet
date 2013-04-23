@@ -8,16 +8,6 @@
 
 #include "ConcSparseIntSet.h"
 
-// This class is just to ensure initialization of an int to 0.
-class Int {
-public:
-    int val;
-    Int() {
-	val = 0;
-    }
-};
-typedef tbb::combinable<Int> threadLocalInt;
-
 void ConcSkipList::init(void) {
     int layer;
     for (layer = 0; layer < MAX_HEIGHT; layer++)
@@ -63,9 +53,9 @@ int ConcSkipList::getRandomHeight(void)
     // Instead of calling rand() multiple times, use the individual bits inside a randomly generated
     // number. Each bit is 0/1 with a probability of 1/2.
 
-    static threadLocalInt bits, reset;
+    static int bits = 0, reset = 0;
     int h, found = 0, max = MAX_HEIGHT;
-    int &bitsLocal = bits.local().val, &resetLocal = reset.local().val;
+    int &bitsLocal = bits, &resetLocal = reset;
 	
     for (h = 0; !found; h++) {
 	if (resetLocal == 0) {
@@ -78,6 +68,10 @@ int ConcSkipList::getRandomHeight(void)
 	bitsLocal = bitsLocal >> 1;
 	--(resetLocal);
     }
+
+    // could lead to race conditions, but thats ok
+    bits = bitsLocal;
+    reset = resetLocal;
  
     // at this point we must have a number between 1..INF.
     // anything > max must be equally distributed among 
