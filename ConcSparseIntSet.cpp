@@ -55,7 +55,7 @@ int ConcSkipList::getRandomHeight(void)
 
     static int bits = 0, reset = 0;
     int h, found = 0, max = MAX_HEIGHT;
-    int &bitsLocal = bits, &resetLocal = reset;
+    int bitsLocal = bits, resetLocal = reset;
 	
     for (h = 0; !found; h++) {
 	if (resetLocal == 0) {
