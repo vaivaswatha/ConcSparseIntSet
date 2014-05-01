@@ -10,6 +10,7 @@
 
 void ConcSkipList::init(void) {
     int layer;
+
     for (layer = 0; layer < MAX_HEIGHT; layer++)
 	lSentinal.nexts[layer] = &rSentinal;
     
@@ -19,8 +20,33 @@ void ConcSkipList::init(void) {
 int ConcSkipList::findNode(int64_t key, Node *preds[], Node *succs[])
 {
     int lFound = -1, layer;
-    Node *pred = &lSentinal, *cur;
-    
+    Node *pred, *cur;
+
+    Node *&lastAccessed = accessCache.local().lastAccessed;
+    Node **lastAccessedPreds = (accessCache.local().lastAccessedPreds);
+    Node **lastAccessedSuccs = (accessCache.local().lastAccessedSuccs);
+
+    if (lastAccessed) {
+	// see if we can avoid traversing the list from start.
+	if (lastAccessed->key == key) {
+	    lFound = lastAccessed->topLayer;
+	    for (layer = MAX_HEIGHT-1; layer >= 0; layer--) {
+		preds[layer] = lastAccessedPreds[layer];
+		succs[layer] = lastAccessedSuccs[layer];
+	    }
+	    return lFound;
+	} else if (lastAccessed->key < key) {
+	    // Can do better than this? Below will begin
+	    // search at the last known predecessor at
+	    // the maximum height. Maybe it can be improved.
+	    pred = lastAccessedPreds[MAX_HEIGHT-1];
+	} else {
+	    pred = &lSentinal;
+	}
+    } else {
+	pred = &lSentinal;
+    }
+
     // traverse, from the top most linked list ...
     for (layer = MAX_HEIGHT-1; layer >= 0; layer--) {
 	cur = pred->nexts[layer];
@@ -29,14 +55,22 @@ int ConcSkipList::findNode(int64_t key, Node *preds[], Node *succs[])
 	    pred = cur;
 	    cur = pred->nexts[layer];
 	}
+	lastAccessed = cur;
+
 	// below may be optimized as mentioned in the paper
 	if (lFound == -1 && key == cur->key) {
+	    // this assertion helps me return node->topLayer as lFound
+	    // when using a cached copy of the linked list node.
+	    assert(layer == cur->topLayer);
 	    lFound = layer;
 	}
+
 	// last node with a key less than "key" encountered at "layer"
 	preds[layer] = pred;
+	lastAccessedPreds[layer] = pred;
 	// the node that succeeds preds[layer] (at "layer")
 	succs[layer] = cur;
+	lastAccessedSuccs[layer] = cur;
     }
     return lFound;
 }
@@ -115,6 +149,7 @@ ConcSkipList::Node *ConcSkipList::insert_default(uint32_t pKey)
     while (true) {
 	lFound = findNode(key, preds, succs);
 	if (lFound != -1) {
+	    assert(lFound >= 0);
 	    // Node found ... 
 	    nodeFound = succs[lFound];
 	    // but is it being deleted?
@@ -161,6 +196,8 @@ ConcSkipList::Node *ConcSkipList::insert_default(uint32_t pKey)
 		    prevPred = pred;
 		}
 	    }
+	    // reset lastAccessed since it may be invalid.
+	    accessCache.local().lastAccessed = NULL;
 	    continue;
 	}
 	
