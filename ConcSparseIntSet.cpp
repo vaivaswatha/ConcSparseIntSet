@@ -16,10 +16,10 @@ void ConcSkipList::init(void) {
     deletedNodes.clear();
 }
 
-int ConcSkipList::findNode(int64_t key, Node *preds[], Node *succs[])
+int ConcSkipList::findNode(int64_t key, Node const *preds[], Node const *succs[]) const
 {
     int lFound = -1, layer;
-    Node *pred = &lSentinal, *cur;
+    const Node *pred = &lSentinal, *cur;
     
     // traverse, from the top most linked list ...
     for (layer = MAX_HEIGHT-1; layer >= 0; layer--) {
@@ -43,7 +43,7 @@ int ConcSkipList::findNode(int64_t key, Node *preds[], Node *succs[])
 
 // returns a random number in the range 0 to MAX_HEIGHT-1.
 // probability of 1 is 1/2, 2 is 1/4, 3 is 1/8 and so on ...
-int ConcSkipList::getRandomHeight(void) 
+int ConcSkipList::getRandomHeight(void) const
 {
     // code taken from http://eternallyconfuzzled.com/tuts/datastructures/jsw_tut_skip.aspx
     // this is a very nice article on skip lists. a must read.
@@ -113,7 +113,7 @@ ConcSkipList::Node *ConcSkipList::insert_default(uint32_t pKey)
     bool valid;
     
     while (true) {
-	lFound = findNode(key, preds, succs);
+	lFound = findNode(key, (const Node **)preds, (const Node **)succs);
 	if (lFound != -1) {
 	    // Node found ... 
 	    nodeFound = succs[lFound];
@@ -186,17 +186,22 @@ ConcSkipList::Node *ConcSkipList::insert_default(uint32_t pKey)
     }
 }
 
-bool ConcSkipList::contains(uint32_t pKey) 
+bool ConcSkipList::contains(uint32_t pKey) const
 {
     // the internal container for key is bigger than what
     // is supported from outside. This is to accomodate MaxInt and MinInt
     int64_t key = (int64_t) pKey;
-    Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
+    const Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
     int lFound = findNode (key, preds, succs);
 
     return (lFound != -1 &&
 	    succs[lFound]->fullyLinked &&
 	    !succs[lFound]->marked);
+}
+
+bool ConcSkipList::empty() const
+{
+    return lSentinal.nexts[0] == &rSentinal;
 }
 
 // this is the interface used for adding bits, by the covering
@@ -222,10 +227,10 @@ bool ConcSkipList::addKeyBit(uint32_t pKey, uint32_t bit)
     return (value1 != value2);
 }
 
-bool ConcSkipList::testKeyBit(uint32_t pKey, uint32_t bit) 
+bool ConcSkipList::testKeyBit(uint32_t pKey, uint32_t bit) const
 {
     int64_t key = (int64_t) pKey;
-    Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
+    const Node *preds[MAX_HEIGHT], *succs[MAX_HEIGHT] ;
     int lFound = findNode (key, preds, succs);
 
     assert(bit < wordSize);
@@ -288,7 +293,7 @@ ConcSkipList::ConcSkipListIterator::ConcSkipListIterator
     }
 }
 	
-ConcSkipList::KeyValPair ConcSkipList::ConcSkipListIterator::operator* ()
+ConcSkipList::KeyValPair ConcSkipList::ConcSkipListIterator::operator* () const
 {
     assert(curNode != &sl->lSentinal && curNode != &sl->rSentinal);
     return KeyValPair(key, value);
@@ -326,21 +331,21 @@ ConcSkipList::ConcSkipListIterator &ConcSkipList::ConcSkipListIterator::operator
     return *this;
 }
 
-bool ConcSkipList::ConcSkipListIterator::operator== (const ConcSkipList::ConcSkipListIterator &rhs) 
+bool ConcSkipList::ConcSkipListIterator::operator== (const ConcSkipList::ConcSkipListIterator &rhs) const
 {
     return (sl == rhs.sl && curNode == rhs.curNode);
 }
 
-bool ConcSkipList::ConcSkipListIterator::operator!= (const ConcSkipList::ConcSkipListIterator &rhs) 
+bool ConcSkipList::ConcSkipListIterator::operator!= (const ConcSkipList::ConcSkipListIterator &rhs)  const
 {
     return !(*this == rhs);
 }
 
-ConcSkipList::ConcSkipListIterator ConcSkipList::begin() 
+ConcSkipList::ConcSkipListIterator ConcSkipList::begin()
 {
     return iterator(*this);
 }
-ConcSkipList::ConcSkipListIterator ConcSkipList::end() 
+ConcSkipList::ConcSkipListIterator ConcSkipList::end()
 {
     return iterator(*this, &(this->rSentinal));
 }
@@ -385,7 +390,7 @@ void ConcSparseIntSet::set(uint32_t bit)
     this->sl->addKeyBit(base, offset);
 }
 
-bool ConcSparseIntSet::test(uint32_t bit)
+bool ConcSparseIntSet::test(uint32_t bit) const
 {
     uint32_t base, offset;
 
@@ -393,14 +398,14 @@ bool ConcSparseIntSet::test(uint32_t bit)
     return (this->sl->testKeyBit(base, offset));
 }
 
-bool ConcSparseIntSet::empty(void)
+bool ConcSparseIntSet::empty(void) const
 {
-    return begin() == end();
+    return sl->empty();
 }
 
 // returns the first set bit in "word", starting from "off".
 // if there are none, it return wordSize.
-uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::firstSet(uint64_t val, uint32_t off) 
+uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::firstSet(uint64_t val, uint32_t off) const
 {
     // off == wordSize when iterator (caller) has reached end
     // we don't do anything in that case but just return the same.
@@ -431,7 +436,7 @@ ConcSparseIntSet::ConcSparseIntSetIterator::ConcSparseIntSetIterator
     }
 }
 
-uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::operator* ()
+uint32_t ConcSparseIntSet::ConcSparseIntSetIterator::operator* () const
 {
     uint32_t base, offset;
     // cannot indirect the iterator after it has reached its end.
@@ -467,12 +472,12 @@ ConcSparseIntSet::ConcSparseIntSetIterator &ConcSparseIntSet::ConcSparseIntSetIt
     return *this;
 }
 
-bool ConcSparseIntSet::ConcSparseIntSetIterator::operator== (const ConcSparseIntSetIterator &rhs)
+bool ConcSparseIntSet::ConcSparseIntSetIterator::operator== (const ConcSparseIntSetIterator &rhs) const
 {
     return (sl == rhs.sl && sli == rhs.sli && curOff == rhs.curOff);
 }
 
-bool ConcSparseIntSet::ConcSparseIntSetIterator::operator!= (const ConcSparseIntSetIterator &rhs)
+bool ConcSparseIntSet::ConcSparseIntSetIterator::operator!= (const ConcSparseIntSetIterator &rhs) const
 {
     return !(*this == rhs);
 }

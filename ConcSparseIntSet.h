@@ -54,8 +54,8 @@ class ConcSkipList {
 
     DeletedNodesList deletedNodes;
     void init(void);
-    int findNode(int64_t key, Node *preds[], Node *succs[]);
-    int getRandomHeight(void);
+    int findNode(int64_t key, Node const *preds[], Node const *succs[]) const;
+    int getRandomHeight(void) const;
  public:
     ConcSkipList();
     // if pKey not already present 
@@ -64,13 +64,15 @@ class ConcSkipList {
     // else
     //   return pointer to existing Node with key pKey.
     Node *insert_default(uint32_t pKey);
-    bool contains(uint32_t pKey);
+    ConcSkipList& operator= (const ConcSkipList &rhs);
+    bool contains(uint32_t pKey) const;
+    bool empty(void) const;
     // this is the interface used for adding bits, by the covering
     // sparse bit vector. this will atomically add "bit" to the node
     // corresponding to pKey (with such a node being added newly if necessary).
     // returns true if bit was newly set.
     bool addKeyBit(uint32_t pKey, uint32_t bit);
-    bool testKeyBit(uint32_t pKey, uint32_t bit);
+    bool testKeyBit(uint32_t pKey, uint32_t bit) const;
     // not thread safe
     void clearUnsafe(void);
     ~ConcSkipList();
@@ -88,10 +90,10 @@ class ConcSkipList {
 	// constructor for the iterator
 	ConcSkipListIterator() { sl = NULL; curNode = NULL; };
 	ConcSkipListIterator(ConcSkipList &sl, ConcSkipList::Node *startFrom = NULL);
-	KeyValPair operator* ();
+	KeyValPair operator* () const;
 	ConcSkipListIterator &operator++ ();
-	bool operator== (const ConcSkipListIterator &rhs);
-	bool operator!= (const ConcSkipListIterator &rhs);
+	bool operator== (const ConcSkipListIterator &rhs) const;
+	bool operator!= (const ConcSkipListIterator &rhs) const;
     };
     typedef ConcSkipListIterator iterator;
     
@@ -112,8 +114,8 @@ class ConcSparseIntSet {
     void set(unsigned bit);
     // return true if newly set.
     bool test_and_set(unsigned bit);
-    bool test(unsigned bit);
-    bool empty(void);
+    bool test(unsigned bit) const;
+    bool empty(void) const;
 
     class ConcSparseIntSetIterator {
 	ConcSkipList *sl;
@@ -121,16 +123,16 @@ class ConcSparseIntSet {
 	uint32_t curOff;
 	// returns the first set bit in "word", starting from "off".
 	// if there are none, it return wordSize.
-	uint32_t firstSet(uint64_t word, uint32_t off);
+	uint32_t firstSet(uint64_t word, uint32_t off) const;
 
     public:
 	ConcSparseIntSetIterator() { sl = NULL; };
 	ConcSparseIntSetIterator(ConcSkipList &sl, ConcSkipList::iterator &sli);
-	uint32_t operator* ();
+	uint32_t operator* () const;
 	// TODO: define a post-increment operator too.
 	ConcSparseIntSetIterator &operator++ ();
-	bool operator== (const ConcSparseIntSetIterator &rhs);
-	bool operator!= (const ConcSparseIntSetIterator &rhs);
+	bool operator== (const ConcSparseIntSetIterator &rhs) const;
+	bool operator!= (const ConcSparseIntSetIterator &rhs) const;
     };
     typedef ConcSparseIntSetIterator iterator;
     iterator begin();
