@@ -14,7 +14,6 @@
 #include <iostream>
 
 #include <tbb/concurrent_vector.h>
-#include <tbb/combinable.h>
 #include <tbb/spin_mutex.h>
 typedef tbb::spin_mutex Lock;
 
@@ -29,7 +28,6 @@ class ConcSkipList {
     // use a number just lesser/greater than the numbers
     // representable in uint32 (these are the open bounds).
     static const int64_t MinInt = -1, MaxInt = ((int64_t)UINT32_MAX+1);
-
     class Node {
     public:
 	int64_t key;
@@ -52,23 +50,9 @@ class ConcSkipList {
 	}
     } lSentinal, rSentinal;
 
-    // Below will be per ConcSkipList object created, per thread.
-    // This will be used to cache the last accessed node for each
-    // object, by each thread.
-    class CSLThreadLocal {
-    public:
-	Node *lastAccessed;
-	Node *lastAccessedPreds[MAX_HEIGHT] = {}, *lastAccessedSuccs[MAX_HEIGHT] = {};
-	CSLThreadLocal() { lastAccessed = NULL; };
-    };
-    tbb::combinable<CSLThreadLocal> accessCache;
-    
-
-    // maybe this can be a concurrent queue instead of vector? faster?
-    // A list of deleted Nodes within the ConcSkipList object.
     typedef tbb::concurrent_vector<Node *> DeletedNodesList;
-    DeletedNodesList deletedNodes;
 
+    DeletedNodesList deletedNodes;
     void init(void);
     int findNode(int64_t key, Node *preds[], Node *succs[]);
     int getRandomHeight(void);
