@@ -8,12 +8,13 @@
 
 #include "ConcSparseIntSet.h"
 
-void ConcSkipList::init(void) {
+ConcSkipList::DeletedNodesList ConcSkipList::deletedNodes;
+
+void ConcSkipList::initLSentinalLinks(void) 
+{
     int layer;
     for (layer = 0; layer < MAX_HEIGHT; layer++)
 	lSentinal.nexts[layer] = &rSentinal;
-    
-    deletedNodes.clear();
 }
 
 int ConcSkipList::findNode(int64_t key, Node const *preds[], Node const *succs[]) const
@@ -93,7 +94,7 @@ ConcSkipList::ConcSkipList() : lSentinal(MinInt, MAX_HEIGHT-1, 0) , rSentinal(Ma
 { 
     lSentinal.fullyLinked = true;
     rSentinal.fullyLinked = true;
-    init();
+    initLSentinalLinks();
 }
 
 // if pKey not already present 
@@ -186,6 +187,79 @@ ConcSkipList::Node *ConcSkipList::insert_default(uint32_t pKey)
     }
 }
 
+// not thread safe
+ConcSkipList& ConcSkipList::operator= (const ConcSkipList &rhs)
+{
+    Node *prev[MAX_HEIGHT];
+
+    for (int ii = 0; ii < MAX_HEIGHT; ii++)
+	prev[ii] = &lSentinal;
+
+    clearUnsafe();
+    
+    for (Node *rhsCur = rhs.lSentinal.nexts[0]; rhsCur != &rhs.rSentinal; 
+	 rhsCur = rhsCur->nexts[0]) 
+    {
+	// wait until curNode is fullyLinked.
+	// note that that i don't care much about marked (for deletion)
+	// nodes. its always safe to iterate through marked nodes.
+ 	while (!rhsCur->fullyLinked) {
+	    ;
+	    // perhaps a better way to wait? see ConcSkipList::insert_default().
+	}
+
+	Node *newNode = new Node(*rhsCur);
+	for (int layer = 0; layer <= rhsCur->topLayer; layer++) {
+	    prev[layer]->nexts[layer] = newNode;
+	    prev[layer] = newNode;
+	}
+    }
+
+    // Finally finish linking the last node in each layer to rSentinal
+    for (unsigned layer = 0; layer < MAX_HEIGHT; layer++) {
+	prev[layer]->nexts[layer] = &rSentinal;
+    }
+
+    return (*this);
+}
+
+
+bool ConcSkipList::operator!= (const ConcSkipList &rhs) const
+{
+    return !((*this) == rhs);
+}
+
+bool ConcSkipList::operator== (const ConcSkipList &rhs) const
+{
+    Node *rhsCur, *lhsCur;
+
+    for (rhsCur = rhs.lSentinal.nexts[0], lhsCur = lSentinal.nexts[0]; 
+	 rhsCur != &rhs.rSentinal && lhsCur != &rSentinal; 
+	 rhsCur = rhsCur->nexts[0], lhsCur = lhsCur->nexts[0]) 
+    {
+	// wait until curNode is fullyLinked.
+	// note that that i don't care much about marked (for deletion)
+	// nodes. its always safe to iterate through marked nodes.
+	while (!rhsCur->fullyLinked || !lhsCur->fullyLinked) {
+	    ;
+	    // perhaps a better way to wait? see ConcSkipList::insert_default().
+	}
+	if (lhsCur->key != rhsCur->key ||
+	    lhsCur->value != rhsCur->value)
+	{
+	    return false;
+	}
+    }
+
+    if (lhsCur != &rSentinal ||
+	rhsCur != &rhs.rSentinal)
+    {
+	return false;
+    }
+
+    return true;
+}
+
 bool ConcSkipList::contains(uint32_t pKey) const
 {
     // the internal container for key is bigger than what
@@ -243,22 +317,28 @@ bool ConcSkipList::testKeyBit(uint32_t pKey, uint32_t bit) const
 }
 
 // not thread safe
+void ConcSkipList::freeDeletedNodes(void)
+{
+    DeletedNodesList::iterator iter;
+
+    // free elements that were deleted
+    for (iter = deletedNodes.begin(); iter != deletedNodes.end(); iter++) {
+	delete *iter;
+    }
+}
+
+// not thread safe
 void ConcSkipList::clearUnsafe(void) 
 {
     Node *ptr1, *ptr2;
-    DeletedNodesList::iterator iter;
     
     // free elements on the list
     for (ptr1 = lSentinal.nexts[0]; ptr1 != &rSentinal; ptr1 = ptr2) {
 	ptr2 = ptr1->nexts[0];
 	delete ptr1;
     }
-    // free elements that were deleted
-    for (iter = deletedNodes.begin(); iter != deletedNodes.end(); iter++) {
-	delete *iter;
-    }
-    
-    init();
+
+    initLSentinalLinks();
 }
 
 ConcSkipList::~ConcSkipList() 
@@ -363,23 +443,13 @@ static inline uint32_t get_bit_from_base_off(uint32_t base, uint32_t off)
     return ((base * wordSize) + off);
 }
 
-ConcSparseIntSet::ConcSparseIntSet()
-{
-    sl = new ConcSkipList;
-}
-
-ConcSparseIntSet::~ConcSparseIntSet()
-{
-    delete sl;
-}
-
 // return true if newly set
 bool ConcSparseIntSet::test_and_set(uint32_t bit)
 {
     uint32_t base, offset;
     
     get_base_off(bit, &base, &offset);
-    return (this->sl->addKeyBit(base, offset));
+    return (this->sl.addKeyBit(base, offset));
 }
 
 void ConcSparseIntSet::set(uint32_t bit)
@@ -387,7 +457,7 @@ void ConcSparseIntSet::set(uint32_t bit)
     uint32_t base, offset;
     
     get_base_off(bit, &base, &offset);
-    this->sl->addKeyBit(base, offset);
+    this->sl.addKeyBit(base, offset);
 }
 
 bool ConcSparseIntSet::test(uint32_t bit) const
@@ -395,13 +465,30 @@ bool ConcSparseIntSet::test(uint32_t bit) const
     uint32_t base, offset;
 
     get_base_off(bit, &base, &offset);
-    return (this->sl->testKeyBit(base, offset));
+    return (this->sl.testKeyBit(base, offset));
 }
 
 bool ConcSparseIntSet::empty(void) const
 {
-    return sl->empty();
+    return sl.empty();
 }
+
+bool ConcSparseIntSet::operator== (const ConcSparseIntSet &rhs) const
+{
+    return sl == rhs.sl;
+}
+
+bool ConcSparseIntSet::operator!= (const ConcSparseIntSet &rhs) const
+{
+    return !((*this) == rhs);
+}
+
+ConcSparseIntSet& ConcSparseIntSet::operator= (const ConcSparseIntSet &rhs)
+{
+    sl = rhs.sl;
+    return *this;
+}
+
 
 // returns the first set bit in "word", starting from "off".
 // if there are none, it return wordSize.
@@ -484,14 +571,14 @@ bool ConcSparseIntSet::ConcSparseIntSetIterator::operator!= (const ConcSparseInt
 
 ConcSparseIntSet::ConcSparseIntSetIterator ConcSparseIntSet::begin()
 {
-    ConcSkipList::iterator sli = this->sl->begin();;
-    return ConcSparseIntSetIterator(*(this->sl), sli);
+    ConcSkipList::iterator sli = this->sl.begin();;
+    return ConcSparseIntSetIterator(this->sl, sli);
 }
 
 ConcSparseIntSet::ConcSparseIntSetIterator ConcSparseIntSet::end()
 {
-    ConcSkipList::iterator sli = this->sl->end();;
-    return ConcSparseIntSetIterator(*(this->sl), sli);
+    ConcSkipList::iterator sli = this->sl.end();;
+    return ConcSparseIntSetIterator(this->sl, sli);
 }
 
 void ConcSparseIntSet::print(std::ostream &file)
@@ -515,8 +602,8 @@ typedef tbb::concurrent_unordered_set<int> RefSetType;
 static const uint32_t size = 200000;
 uint32_t input[size];
 RefSetType ref;
-ConcSkipList t1;
-ConcSparseIntSet t2;
+ConcSkipList t1, t11;
+ConcSparseIntSet t2, t21;
 
 // for tbb's parallel_for
 struct TestFuncKey {
@@ -596,6 +683,9 @@ int main(void)
 	assert(retVal == true);
     }
 
+    t11 = t1;
+    assert(t11 == t1);
+
     // now a parallel test ...
     // fill some random input into an array (random() is not thread safe)
     for (ii = 0; ii < size; ii++) {
@@ -647,6 +737,21 @@ int main(void)
     // parallel now
     // insert random elements, parallelly
     parallel_for(full_range, testFuncBit);
+
+    t21 = t2;
+    assert(t21 == t2);
+    unsigned tmp = random() % 29912; // random
+    if (t21.test_and_set(tmp)) {
+	ConcSparseIntSet t22 = t21, t23;
+	assert(t21 != t2);
+	t21 = t2;
+	assert(t21 == t2 && t22 != t2 && t22 != t21);
+	t23 = t21;
+	assert(t23 == t21);
+	if (t23.test_and_set(tmp + 1)) {
+	    assert(t23 != t21 && t23 != t2 && t23 != t22);
+	}
+    }
 
     // check if insertions happened correctly
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {

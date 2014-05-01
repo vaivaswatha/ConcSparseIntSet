@@ -52,8 +52,8 @@ class ConcSkipList {
 
     typedef tbb::concurrent_vector<Node *> DeletedNodesList;
 
-    DeletedNodesList deletedNodes;
-    void init(void);
+    static DeletedNodesList deletedNodes;
+    void initLSentinalLinks(void);
     int findNode(int64_t key, Node const *preds[], Node const *succs[]) const;
     int getRandomHeight(void) const;
  public:
@@ -64,7 +64,12 @@ class ConcSkipList {
     // else
     //   return pointer to existing Node with key pKey.
     Node *insert_default(uint32_t pKey);
+
+    // not thread safe
     ConcSkipList& operator= (const ConcSkipList &rhs);
+    bool operator== (const ConcSkipList &rhs) const;
+    bool operator!= (const ConcSkipList &rhs) const;
+
     bool contains(uint32_t pKey) const;
     bool empty(void) const;
     // this is the interface used for adding bits, by the covering
@@ -73,7 +78,9 @@ class ConcSkipList {
     // returns true if bit was newly set.
     bool addKeyBit(uint32_t pKey, uint32_t bit);
     bool testKeyBit(uint32_t pKey, uint32_t bit) const;
-    // not thread safe
+    // not thread safe. Call this to free up memory from deleted nodes.
+    static void freeDeletedNodes(void);
+    // not thread safe.
     void clearUnsafe(void);
     ~ConcSkipList();
 
@@ -103,19 +110,23 @@ class ConcSkipList {
 
 class ConcSparseIntSet {
 
-    ConcSkipList *sl;
-
-    // safe to define one privately to avoid wrong usage when using STL.
-    ConcSparseIntSet(const ConcSparseIntSet &rhs) {};
+    ConcSkipList sl;
 
  public:
-    ConcSparseIntSet();
-    ~ConcSparseIntSet();
+    ConcSparseIntSet(void) { ; };
+    ConcSparseIntSet(const ConcSparseIntSet &rhs) { (*this) = rhs; };
     void set(unsigned bit);
     // return true if newly set.
     bool test_and_set(unsigned bit);
     bool test(unsigned bit) const;
     bool empty(void) const;
+
+    // Run this frequently to reclaim memory from deleted nodes. NOT thread safe.
+    static void runGarbageCollection(void) { ConcSkipList::freeDeletedNodes(); };
+
+    bool operator== (const ConcSparseIntSet &rhs) const;
+    bool operator!= (const ConcSparseIntSet &rhs) const;
+    ConcSparseIntSet& operator= (const ConcSparseIntSet &rhs);
 
     class ConcSparseIntSetIterator {
 	ConcSkipList *sl;
