@@ -223,6 +223,137 @@ ConcSkipList& ConcSkipList::operator= (const ConcSkipList &rhs)
     return (*this);
 }
 
+bool ConcSkipList::operator|= (const ConcSkipList &rhs)
+{
+    Node *lhsPrev[MAX_HEIGHT], *lhsPrevSucc[MAX_HEIGHT];
+    int lFound, topLayer, layer;
+    int64_t key;
+    int32_t highestLocked;
+    bool changed = false, valid;
+    Node *lhsCur, *rhsCur, *prev, *topPrev, *prevPred, *pred, *succ, *nodeFound;
+
+    // Initialize both list iterators.
+    for (int ii = 0; ii < MAX_HEIGHT; ii++) {
+	lhsPrev[ii] = &lSentinal;
+	lhsPrevSucc[ii] = &rSentinal;
+    }
+    rhsCur = rhs.lSentinal.nexts[0];
+
+    topPrev = &lSentinal;
+    while (rhsCur != &rhs.rSentinal) {
+	// wait until rhsCur is fullyLinked.
+	// note that that i don't care much about marked (for deletion)
+	// nodes. its always safe to iterate through marked nodes.
+ 	while (!rhsCur->fullyLinked) {
+	    ;
+	    // perhaps a better way to wait? see ConcSkipList::insert_default().
+	}
+
+	lFound = -1;
+	key = rhsCur->key;
+	prev = topPrev;
+	for (layer = MAX_HEIGHT-1; layer >= 0; layer--) {
+	    lhsCur = prev;
+	    // traverse at height "layer" as far as possible
+	    while (lhsCur->key < key) {
+		prev = lhsCur;
+		lhsCur = lhsCur->nexts[layer];
+	    }
+	    // Save prev at MAX_HEIGHT-1. This is needed to begin
+	    // search again for a new key (> current key).
+	    if (layer == MAX_HEIGHT-1)
+		topPrev = lhsPrev[layer];
+
+	    // below may be optimized as mentioned in the paper
+	    if (lFound == -1 && key == lhsCur->key) {
+		lFound = layer;
+	    }
+	    // last node with a key less than "key" encountered at "layer"
+	    lhsPrev[layer] = prev;
+	    // the node that succeeds preds[layer] (at "layer")
+	    lhsPrevSucc[layer] = lhsCur;
+	}
+
+	if (lFound != -1) {
+	    // Node found ... 
+	    nodeFound = lhsPrevSucc[lFound];
+	    // but is it being deleted?
+	    if (!nodeFound->marked) {
+		// not being deleted, but is it being just inserted (linked)?
+		while (!nodeFound->fullyLinked) {
+		    // the node is being linked, wait for
+		    // it to be fully inserted (linked).
+		    // TODL: this looks very bad, maybe
+		    // add some delay? how much? how?
+		    ;
+		}
+		// Inserted. Just OR the values atomically and continue
+		nodeFound->lock.lock();
+		nodeFound->value |= rhsCur->value;
+		nodeFound->lock.unlock();
+	    } else {
+		assert(!"Deletion not supported yet");
+	    }
+	} else {
+	    // key not already present. insert it now.
+	    topLayer = getRandomHeight();
+	    highestLocked = -1;
+	    prevPred = NULL;
+	    valid = true;
+	    for (layer = 0; layer <= topLayer && valid; layer++) {
+		pred = lhsPrev[layer];
+		succ = lhsPrevSucc[layer];
+		// don't want to lock the same node multiple times ...
+		if (pred != prevPred) {
+		    pred->lock.lock();
+		    highestLocked = layer;
+		    prevPred = pred;
+		}
+		valid = !pred->marked && !succ->marked && 
+		    pred->nexts[layer] == succ;
+	    }
+	    if (!valid) {
+		prevPred = NULL;
+		// release locks and continue
+		for (layer = 0; layer <= highestLocked; layer++) {
+		    pred = lhsPrev[layer];
+		    // don't want to unlock the same node multiple times ...
+		    if (pred != prevPred) {
+			pred->lock.unlock();
+			prevPred = pred;
+		    }
+		}
+		// Try again. rhsCur is not incremented here.
+		continue;
+	    }
+	
+	    // if we're here, it means we've got all the necessary locks. its now
+	    // safe to do the linked list operations for lists at all levels.
+	    Node *newNode = new Node(rhsCur->key, topLayer, rhsCur->value);
+	    for (layer = 0; layer <= topLayer; layer++)  {
+		newNode->nexts[layer] = lhsPrevSucc[layer];
+		lhsPrev[layer]->nexts[layer] = newNode;
+	    }
+
+	    newNode->fullyLinked = true;
+	    prevPred = NULL;
+	    // release locks and return
+	    for (layer = 0; layer <= highestLocked && valid; layer++) {
+		pred = lhsPrev[layer];
+		// don't want to unlock the same node multiple times ...
+		if (pred != prevPred) {
+		    pred->lock.unlock();
+		    prevPred = pred;
+		}
+	    }
+	}
+
+	// increment rhs iterator.
+	rhsCur = rhsCur->nexts[0];
+    }
+
+    return changed;
+}
 
 bool ConcSkipList::operator!= (const ConcSkipList &rhs) const
 {
@@ -473,6 +604,16 @@ bool ConcSparseIntSet::empty(void) const
     return sl.empty();
 }
 
+// TODO: Make this a const method by adding const iterators.
+uint32_t ConcSparseIntSet::count(void)
+{
+    uint32_t c = 0;
+    for (iterator i = begin(); i != end(); ++i) {
+	c++;
+    }
+    return c;
+}
+
 bool ConcSparseIntSet::operator== (const ConcSparseIntSet &rhs) const
 {
     return sl == rhs.sl;
@@ -489,6 +630,11 @@ ConcSparseIntSet& ConcSparseIntSet::operator= (const ConcSparseIntSet &rhs)
     return *this;
 }
 
+ConcSparseIntSet& ConcSparseIntSet::operator|= (const ConcSparseIntSet &rhs)
+{
+    sl |= rhs.sl;
+    return *this;
+}
 
 // returns the first set bit in "word", starting from "off".
 // if there are none, it return wordSize.
@@ -589,6 +735,14 @@ void ConcSparseIntSet::print(std::ostream &file)
     file << std::endl;
 }
 
+void ConcSparseIntSet::print()
+{
+    for (ConcSparseIntSet::iterator iter = begin(); iter != end(); ++iter) {
+	std::cout << (*iter) << " ";
+    }
+    std::cout << std::endl;
+}
+
 // Everything below is just testing code
 #ifdef TEST_CONC_SPARSE_INT_SET
 
@@ -601,9 +755,9 @@ typedef tbb::concurrent_unordered_set<int> RefSetType;
 
 static const uint32_t size = 200000;
 uint32_t input[size];
-RefSetType ref;
+RefSetType ref, ref2;
 ConcSkipList t1, t11;
-ConcSparseIntSet t2, t21;
+ConcSparseIntSet t2, t21, t31, t34;
 
 // for tbb's parallel_for
 struct TestFuncKey {
@@ -631,9 +785,11 @@ struct TestFuncBit {
 	uint32_t ii, val;
 	bool retVal;
 	ConcSparseIntSet::iterator iter;
+	ConcSparseIntSet buf;
 
 	for (ii = range.begin(); ii < range.end(); ii++) {
 	    val = input[ii];
+	    buf.set(val);
 	    if (ref.find(val) != ref.end()) {
 		// value already exists in the set.
 		// See if the value can be reached through an iterator.
@@ -650,6 +806,8 @@ struct TestFuncBit {
 		assert(retVal == true);
 	    }
 	}
+
+	t34 |= buf;
     }
 } testFuncBit;
 
@@ -734,10 +892,7 @@ int main(void)
 	assert(retVal == true);
     }
 
-    // parallel now
-    // insert random elements, parallelly
-    parallel_for(full_range, testFuncBit);
-
+    // tests for operator=
     t21 = t2;
     assert(t21 == t2);
     unsigned tmp = random() % 29912; // random
@@ -752,6 +907,45 @@ int main(void)
 	    assert(t23 != t21 && t23 != t2 && t23 != t22);
 	}
     }
+
+    // test operator |=
+    ConcSparseIntSet t33;
+    t31.set(10); t31.set(11); t31.set(100);
+    t33.set(11);
+    t33 |= t31;
+    assert(t33 == t31);
+
+    t31 = t21;
+    // insert elements not already present.
+    for (int k = 0; k < 50; k++) {
+	do {
+	    tmp = random() % 12213;
+	} while (!t21.test_and_set(tmp));
+    }
+    assert(t31 != t21);
+    t31 |= t21;
+    assert(t31 == t21);
+    // insert elements not already present.
+    ConcSparseIntSet t32;
+    for (int k = 0; k < 50; k++) {
+	do {
+	    tmp = random() % 12213;
+	    if (t31.test_and_set(tmp)) {
+		t32.set(tmp);
+		break;
+	    }
+	} while (1);
+    }
+    assert(t31 != t21);
+    t21 |= t32;
+    assert(t31 == t21);
+
+    t34 |= t2;
+    // parallel now
+    // insert random elements, parallelly
+    parallel_for(full_range, testFuncBit);
+
+    assert(t34 == t2);
 
     // check if insertions happened correctly
     for (RefSetType::iterator iter = ref.begin(); iter != ref.end(); iter++) {

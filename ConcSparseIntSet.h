@@ -65,10 +65,11 @@ class ConcSkipList {
     //   return pointer to existing Node with key pKey.
     Node *insert_default(uint32_t pKey);
 
-    // not thread safe
-    ConcSkipList& operator= (const ConcSkipList &rhs);
+    bool operator|= (const ConcSkipList &rhs);
     bool operator== (const ConcSkipList &rhs) const;
     bool operator!= (const ConcSkipList &rhs) const;
+    // not thread safe
+    ConcSkipList& operator= (const ConcSkipList &rhs);
 
     bool contains(uint32_t pKey) const;
     bool empty(void) const;
@@ -120,6 +121,8 @@ class ConcSparseIntSet {
     bool test_and_set(unsigned bit);
     bool test(unsigned bit) const;
     bool empty(void) const;
+    // linear time
+    uint32_t count(void);
 
     // Run this frequently to reclaim memory from deleted nodes. NOT thread safe.
     static void runGarbageCollection(void) { ConcSkipList::freeDeletedNodes(); };
@@ -127,6 +130,7 @@ class ConcSparseIntSet {
     bool operator== (const ConcSparseIntSet &rhs) const;
     bool operator!= (const ConcSparseIntSet &rhs) const;
     ConcSparseIntSet& operator= (const ConcSparseIntSet &rhs);
+    ConcSparseIntSet& operator|= (const ConcSparseIntSet &rhs);
 
     class ConcSparseIntSetIterator {
 	ConcSkipList *sl;
@@ -149,6 +153,8 @@ class ConcSparseIntSet {
     iterator begin();
     iterator end();
     void print (std::ostream &file);
+    // print to stdout
+    void print (void);
 };
 
 #endif // _CONC_SPARSE_INT_SET
